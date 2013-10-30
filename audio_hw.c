@@ -22,6 +22,7 @@ struct scr_audio_device {
     int16_t buffer[BUFFER_SIZE];
     int bufferStart;
     int bufferEnd;
+    pthread_mutex_t lock;
 };
 
 struct scr_stream_out {
@@ -131,14 +132,22 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
     struct audio_stream_out *primary = scr_stream->primary;
     struct scr_audio_device *device = scr_stream->dev;
 
-    int frameSize = 4; // 16 bit stereo
+    int frameSize = audio_stream_frame_size(&primary->common);
     int frameCount = bytes / frameSize;
     int16_t *frames = (int16_t *)buffer;
+
+    pthread_mutex_lock(&device->lock);
     int i = 0;
     for (i = 0; i < frameCount; i++) {
-        device->buffer[device->bufferEnd] = frames[2*i];
-        device->bufferEnd = (device->bufferEnd + 1) % BUFFER_SIZE; // TODO: handle overrun and locking
+        if (frameSize == 4) { // down mix 16bit stereo
+            device->buffer[device->bufferEnd] = (frames[2*i] + frames[2*i + 1]) / 2;
+        } else {
+            device->buffer[device->bufferEnd] = frames[2*i];
+        }
+
+        device->bufferEnd = (device->bufferEnd + 1) % BUFFER_SIZE; // TODO: handle overrun
     }
+    pthread_mutex_unlock(&device->lock);
     //ALOGD("out_write frameCount: %d, start: %d, end: %d", frameCount, device->bufferStart, device->bufferEnd);
     return primary->write(primary, buffer, bytes);
 }
@@ -293,10 +302,13 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
     int frames_recorded = 0;
     int waitRetry = 0;
 
+    pthread_mutex_lock(&device->lock);
     for (i = 0; i < frames; i++) {
         while (device->bufferStart == device->bufferEnd) {
+            pthread_mutex_unlock(&device->lock);
             if (waitRetry++ < 10) {
                 usleep(10000);
+                pthread_mutex_lock(&device->lock);
             } else {
                 ALOGW("no data received on time requested:%d  received:%d", frames, frames_recorded);
                 return frames_recorded * frame_size;
@@ -306,6 +318,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
         buff[i] = device->buffer[device->bufferStart];
         device->bufferStart = (device->bufferStart + 1) % BUFFER_SIZE;
     }
+    pthread_mutex_unlock(&device->lock);
     //ALOGD("in_read requested:%d  received:%d start: %d, end: %d", frames, frames_recorded, device->bufferStart, device->bufferEnd);
     return frames_recorded * frame_size;
 }
@@ -501,8 +514,11 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     in->stream.read = in_read;
     in->stream.get_input_frames_lost = in_get_input_frames_lost;
 
-    //ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
-    in->primary = NULL;
+    if (config->sample_rate == 44100) {
+        in->primary = NULL;
+    } else {
+        ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
+    }
 
     in->dev = scr_dev;
     scr_dev->bufferStart = 0;
@@ -592,6 +608,8 @@ static int adev_open(const hw_module_t* module, const char* name,
     }
 
     ret = primaryModule->methods->open(module, name, (struct hw_device_t **)&adev->primary);
+
+    pthread_mutex_init(&adev->lock, NULL);
 
     *device = &adev->device.common;
 
