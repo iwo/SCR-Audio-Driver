@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <sys/time.h>
 
+#include <math.h>
+
 #include <cutils/log.h>
 
 #include <hardware/hardware.h>
@@ -117,7 +119,7 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
 static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                          size_t bytes)
 {
-    ALOGV("out_write");
+    //ALOGV("out_write");
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream_out *primary = scr_stream->primary;
     return primary->write(primary, buffer, bytes);
@@ -158,63 +160,81 @@ static uint32_t in_get_sample_rate(const struct audio_stream *stream)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->get_sample_rate(primary);
+    if (primary)
+        return primary->get_sample_rate(primary);
+    return 44100;
 }
 
 static int in_set_sample_rate(struct audio_stream *stream, uint32_t rate)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->set_sample_rate(primary, rate);
+    if (primary)
+        return primary->set_sample_rate(primary, rate);
+    return 0;
 }
 
 static size_t in_get_buffer_size(const struct audio_stream *stream)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->get_buffer_size(primary);
+    if (primary)
+        return primary->get_buffer_size(primary);
+    return 320;
 }
 
 static uint32_t in_get_channels(const struct audio_stream *stream)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->get_channels(primary);
+    if (primary)
+        return primary->get_channels(primary);
+    return AUDIO_CHANNEL_IN_MONO;
 }
 
 static audio_format_t in_get_format(const struct audio_stream *stream)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->get_format(primary);
+    if (primary)
+        return primary->get_format(primary);
+    return AUDIO_FORMAT_PCM_16_BIT;
 }
 
 static int in_set_format(struct audio_stream *stream, audio_format_t format)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->set_format(primary, format);
+    if (primary)
+        return primary->set_format(primary, format);
+    return 0;
 }
 
 static int in_standby(struct audio_stream *stream)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->standby(primary);
+    if (primary)
+        return primary->standby(primary);
+    return 0;
 }
 
 static int in_dump(const struct audio_stream *stream, int fd)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->dump(primary, fd);
+    if (primary)
+        return primary->dump(primary, fd);
+    return 0;
 }
 
 static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->set_parameters(primary, kvpairs);
+    if (primary)
+        return primary->set_parameters(primary, kvpairs);
+    return 0;
 }
 
 static char * in_get_parameters(const struct audio_stream *stream,
@@ -222,43 +242,71 @@ static char * in_get_parameters(const struct audio_stream *stream,
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->get_parameters(primary, keys);
+    if (primary)
+        return primary->get_parameters(primary, keys);
+    return strdup("");
 }
 
 static int in_set_gain(struct audio_stream_in *stream, float gain)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream_in *primary = scr_stream->primary;
-    return primary->set_gain(primary, gain);
+    if (primary)
+        return primary->set_gain(primary, gain);
+    return 0;
 }
 
 static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
                        size_t bytes)
 {
+    //ALOGD("in_read %d", bytes);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream_in *primary = scr_stream->primary;
-    return primary->read(primary, buffer, bytes);
+    if (primary)
+        return primary->read(primary, buffer, bytes);
+
+    int frame_size = 2; //16 bit rames
+    int frames = bytes / frame_size;
+    int sample_rate = in_get_sample_rate(&stream->common);
+    int16_t *buff = (int16_t *)buffer;
+
+    const double k = 440.0 / sample_rate * (2.0 * M_PI);
+    double x = 0;
+    int i = 0;
+
+    for (i = 0; i < frames; i++) {
+        buff[i] = (int16_t)(32767.0 * sin(x));
+        x += k;
+    }
+    usleep(frames * 1000000 / sample_rate);
+    return bytes;
 }
 
 static uint32_t in_get_input_frames_lost(struct audio_stream_in *stream)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream_in *primary = scr_stream->primary;
-    return primary->get_input_frames_lost(primary);
+    if (primary)
+        return primary->get_input_frames_lost(primary);
+    return 0;
 }
 
 static int in_add_audio_effect(const struct audio_stream *stream, effect_handle_t effect)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->add_audio_effect(primary, effect);
+    if (primary)
+        return primary->add_audio_effect(primary, effect);
+    return 0;
 }
 
 static int in_remove_audio_effect(const struct audio_stream *stream, effect_handle_t effect)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    return primary->remove_audio_effect(primary, effect);
+    if (primary)
+        return primary->remove_audio_effect(primary, effect);
+    return 0;
 }
 
 static int adev_open_output_stream(struct audio_hw_device *device,
@@ -423,7 +471,8 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     in->stream.read = in_read;
     in->stream.get_input_frames_lost = in_get_input_frames_lost;
 
-    ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
+    //ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
+    in->primary = NULL;
 
     *stream_in = &in->stream;
     return 0;
