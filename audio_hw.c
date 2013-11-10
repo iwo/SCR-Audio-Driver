@@ -30,6 +30,9 @@ struct scr_audio_device {
     bool in_active;
     int64_t out_start_us;
     int64_t out_next_write_us;
+
+    int num_out_streams;
+    struct scr_stream_out *recorded_stream;
     pthread_mutex_t lock;
 };
 
@@ -37,6 +40,7 @@ struct scr_stream_out {
     struct audio_stream_out stream;
     struct audio_stream_out *primary;
     struct scr_audio_device *dev;
+    int stream_no;
 };
 
 struct scr_stream_in {
@@ -66,6 +70,7 @@ static int out_set_sample_rate(struct audio_stream *stream, uint32_t rate)
 {
      struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
      struct audio_stream *primary = &scr_stream->primary->common;
+     ALOGE("out_set_sample_rate %d", rate);
      return primary->set_sample_rate(primary, rate);
 }
 
@@ -143,10 +148,12 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
 static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                          size_t bytes)
 {
-    //ALOGV("out_write");
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream_out *primary = scr_stream->primary;
     struct scr_audio_device *device = scr_stream->dev;
+    //ALOGV("out_write %d", scr_stream->stream_no);
+
+    if (device->recorded_stream == scr_stream) {
 
     int frameSize = audio_stream_frame_size(&primary->common);
     int frameCount = bytes / frameSize;
@@ -173,6 +180,8 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
         device->buffer_end = (device->buffer_end + 1) % BUFFER_SIZE; // TODO: handle overrun
     }
     pthread_mutex_unlock(&device->lock);
+
+    }
     //ALOGD("out_write frameCount: %d, start: %d, end: %d", frameCount, device->buffer_start, device->buffer_end);
     return primary->write(primary, buffer, bytes);
 }
@@ -430,9 +439,9 @@ static int adev_open_output_stream(struct audio_hw_device *device,
                                    struct audio_config *config,
                                    struct audio_stream_out **stream_out)
 {
-    ALOGV("adev_open_output_stream");
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
+    ALOGV("adev_open_output_stream %d, sample_rate: %d", scr_dev->num_out_streams, config->sample_rate);
 
     struct scr_stream_out *out;
     int ret;
@@ -462,6 +471,11 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     primary->open_output_stream(primary, handle, devices, flags, config, &out->primary);
 
     out->dev = scr_dev;
+    out->stream_no = scr_dev->num_out_streams++;
+
+    if (scr_dev->recorded_stream == NULL) {
+        scr_dev->recorded_stream = out;
+    }
 
     *stream_out = &out->stream;
     return 0;
@@ -656,7 +670,7 @@ static int adev_open(const hw_module_t* module, const char* name,
         return -ENOMEM;
 
     adev->device.common.tag = HARDWARE_DEVICE_TAG;
-    adev->device.common.version = AUDIO_DEVICE_API_VERSION_1_0;
+    adev->device.common.version = AUDIO_DEVICE_API_VERSION_2_0;
     adev->device.common.module = (struct hw_module_t *) module;
     adev->device.common.close = adev_close;
 
@@ -676,6 +690,9 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->device.open_input_stream = adev_open_input_stream;
     adev->device.close_input_stream = adev_close_input_stream;
     adev->device.dump = adev_dump;
+
+    adev->recorded_stream = NULL;
+    adev->num_out_streams = 0;
 
     ret = hw_get_module_by_class("audio", "scr_hack", &primaryModule);
 
