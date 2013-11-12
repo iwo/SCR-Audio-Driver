@@ -51,8 +51,6 @@ struct scr_stream_in {
     int64_t frames_read;
 };
 
-static const hw_module_t *primaryModule;
-
 int64_t get_time_us() {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -70,6 +68,7 @@ static int out_set_sample_rate(struct audio_stream *stream, uint32_t rate)
 {
      struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
      struct audio_stream *primary = &scr_stream->primary->common;
+     //TODO: if this stream is being recorded return -EINVAL
      ALOGE("out_set_sample_rate %d", rate);
      return primary->set_sample_rate(primary, rate);
 }
@@ -99,6 +98,7 @@ static int out_set_format(struct audio_stream *stream, audio_format_t format)
 {
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
+    //TODO: if this stream is being recorded return -EINVAL
     return primary->set_format(primary, format);
 }
 
@@ -106,6 +106,7 @@ static int out_standby(struct audio_stream *stream)
 {
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
+    //TODO: set standby flag and standby timestamp
     return primary->standby(primary);
 }
 
@@ -120,6 +121,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 {
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
+    ALOGV("out_set_parameters: %s", kvpairs);
     return primary->set_parameters(primary, kvpairs);
 }
 
@@ -223,6 +225,7 @@ static uint32_t in_get_sample_rate(const struct audio_stream *stream)
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
         return primary->get_sample_rate(primary);
+    //TODO: synchronize sample rate with recorder output
     return 44100;
 }
 
@@ -232,6 +235,7 @@ static int in_set_sample_rate(struct audio_stream *stream, uint32_t rate)
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
         return primary->set_sample_rate(primary, rate);
+    //TODO: if not in sync with output recording return -INVAL;
     return 0;
 }
 
@@ -241,6 +245,8 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
         return primary->get_buffer_size(primary);
+
+    //TODO: figure out correct buffer size
     return 320;
 }
 
@@ -268,6 +274,8 @@ static int in_set_format(struct audio_stream *stream, audio_format_t format)
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
         return primary->set_format(primary, format);
+    if (format != AUDIO_FORMAT_PCM_16_BIT)
+        return -EINVAL;
     return 0;
 }
 
@@ -277,6 +285,7 @@ static int in_standby(struct audio_stream *stream)
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
         return primary->standby(primary);
+    //TODO: set standby flag
     return 0;
 }
 
@@ -295,7 +304,7 @@ static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
         return primary->set_parameters(primary, kvpairs);
-    return 0;
+    return -EINVAL;
 }
 
 static char * in_get_parameters(const struct audio_stream *stream,
@@ -509,7 +518,7 @@ static char * adev_get_parameters(const struct audio_hw_device *device,
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
-    return NULL;
+    return primary->get_parameters(primary, keys);
 }
 
 static int adev_init_check(const struct audio_hw_device *device)
@@ -697,13 +706,20 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->recorded_stream = NULL;
     adev->num_out_streams = 0;
 
+    const struct hw_module_t *primaryModule;
     ret = hw_get_module_by_class("audio", "scr_hack", &primaryModule);
 
     if (ret) {
-        ALOGE("error loading primary module");
+        ALOGE("error loading primary module. error: %d", ret);
+        return ret;
     }
 
     ret = primaryModule->methods->open(module, name, (struct hw_device_t **)&adev->primary);
+
+    if (ret) {
+        ALOGE("can't open primary device. error:%d", ret);
+        return ret;
+    }
 
     pthread_mutex_init(&adev->lock, NULL);
 
