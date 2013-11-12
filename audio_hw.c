@@ -626,9 +626,12 @@ err_open:
 static void adev_close_input_stream(struct audio_hw_device *device,
                                    struct audio_stream_in *in)
 {
+    ALOGV("adev_close_input_stream %p", in);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
-    audio_hw_device_t *primary = scr_dev->primary;
-    primary->close_input_stream(primary, in);
+    struct scr_stream_in *scr_stream = (struct scr_stream_in *)in;
+    audio_hw_device_t *primary_dev = scr_dev->primary;
+    struct audio_stream_in *primary_stream = scr_stream->primary;
+    primary_dev->close_input_stream(primary_dev, primary_stream);
     return;
 }
 
