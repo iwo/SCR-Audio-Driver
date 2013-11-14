@@ -716,11 +716,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->device.get_supported_devices = adev_get_supported_devices;
     adev->device.init_check = adev_init_check;
     adev->device.set_voice_volume = adev_set_voice_volume;
-    adev->device.set_master_volume = adev_set_master_volume;
-    adev->device.get_master_volume = adev_get_master_volume;
     adev->device.set_mode = adev_set_mode;
-    adev->device.set_mic_mute = adev_set_mic_mute;
-    adev->device.get_mic_mute = adev_get_mic_mute;
     adev->device.set_parameters = adev_set_parameters;
     adev->device.get_parameters = adev_get_parameters;
     adev->device.get_input_buffer_size = adev_get_input_buffer_size;
@@ -746,6 +742,19 @@ static int adev_open(const hw_module_t* module, const char* name,
     if (ret) {
         ALOGE("can't open primary device. error:%d", ret);
         return ret;
+    }
+
+    if (adev->primary->set_mic_mute != NULL) {
+        adev->device.set_mic_mute = adev_set_mic_mute;
+    }
+    if (adev->primary->get_mic_mute != NULL) {
+        adev->device.get_mic_mute = adev_get_mic_mute;
+    }
+    if (adev->primary->set_master_volume != NULL) {
+        adev->device.set_master_volume = adev_set_master_volume;
+    }
+    if (adev->primary->get_master_volume != NULL) {
+        adev->device.get_master_volume = adev_get_master_volume;
     }
 
     pthread_mutex_init(&adev->lock, NULL);
