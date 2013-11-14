@@ -734,7 +734,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->num_out_streams = 0;
 
     const struct hw_module_t *primaryModule;
-    ret = hw_get_module_by_class("audio", "scr_hack", &primaryModule);
+    ret = hw_get_module_by_class("audio", "original_primary", &primaryModule);
 
     if (ret) {
         ALOGE("error loading primary module. error: %d", ret);
