@@ -30,10 +30,15 @@ chmod 644 /system/lib/hw/audio.primary.default.so
 if [ -e $DIR/audio_policy.conf ]
 then
     echo "Installing audio policy file"
-    if [ ! -e /system/etc/audio_policy.conf.back ]
+    if [ -e /system/etc/audio_policy.conf ] && [ ! -e /system/etc/audio_policy.conf.back ]
     then
         echo "Moving original audio policy file /system/etc/audio_policy.conf to /system/etc/audio_policy.conf.back"
         mv /system/etc/audio_policy.conf /system/etc/audio_policy.conf.back
+    fi
+    if [ -e /vendor/etc/audio_policy.conf ] && [ ! -e /vendor/etc/audio_policy.conf.back ]
+    then
+        echo "Moving original audio policy file /vendor/etc/audio_policy.conf to /vendor/etc/audio_policy.conf.back"
+        mv /vendor/etc/audio_policy.conf /vendor/etc/audio_policy.conf.back
     fi
     cp $DIR/audio_policy.conf /system/etc/audio_policy.conf
     chmod 644 /system/etc/audio_policy.conf

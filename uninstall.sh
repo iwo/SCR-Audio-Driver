@@ -31,10 +31,16 @@ done
 
 if [ -e /system/etc/audio_policy.conf.back ]
 then
-echo "Restoring original audio policy file"
-rm /system/etc/audio_policy.conf || true
-cp /system/etc/audio_policy.conf.back /system/etc/audio_policy.conf
-chmod 644 /system/etc/audio_policy.conf
+    echo "Restoring original audio policy file"
+    rm /system/etc/audio_policy.conf || true
+    cp /system/etc/audio_policy.conf.back /system/etc/audio_policy.conf
+    chmod 644 /system/etc/audio_policy.conf
 fi
 
+if [ -e /vendor/etc/audio_policy.conf.back ]
+then
+    echo "Restoring original audio policy file"
+    cp /vendor/etc/audio_policy.conf.back /vendor/etc/audio_policy.conf
+    chmod 644 /vendor/etc/audio_policy.conf
+fi
 echo "Done"
