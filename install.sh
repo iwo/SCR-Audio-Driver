@@ -3,6 +3,20 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 echo "Running installation script from $DIR"
 
+function get_mediaserver_pid()
+{
+    local mspid=-1
+    cd /proc
+    for pid in [0-9]*
+    do
+        if [ "$(cat /proc/$pid/cmdline 2>/dev/null)" = "/system/bin/mediaserver" ]
+        then
+            mspid=$pid
+        fi
+    done
+    echo $mspid
+}
+
 echo "Mounting system partition in read-write mode"
 mount -wo remount /system
 set +e
@@ -43,5 +57,26 @@ then
     cp $DIR/audio_policy.conf /system/etc/audio_policy.conf
     chmod 644 /system/etc/audio_policy.conf
 fi
+
+echo "Restarting Media Server"
+pid=$(get_mediaserver_pid)
+echo "    old pid: $pid"
+kill $pid
+sleep 1
+
+newpid=$(get_mediaserver_pid)
+if [ "$newpid" = "$pid" ]
+then
+    echo "force killing Media Server"
+    kill -9 $pid
+fi
+
+until [ "$newpid" !=  "-1" ]
+do
+    sleep 1
+    newpid=$(get_mediaserver_pid)
+done
+
+echo "    new pid: $newpid"
 
 echo "Done"
