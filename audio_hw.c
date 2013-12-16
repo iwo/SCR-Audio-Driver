@@ -14,6 +14,8 @@
 #include <system/audio.h>
 #include <hardware/audio.h>
 
+#include <dlfcn.h>
+
 #define BUFFER_SIZE (16 * 1024)
 #define MAX_WAIT_READ_RETRY 10
 
@@ -60,6 +62,7 @@ int64_t get_time_us() {
 
 static uint32_t out_get_sample_rate(const struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     return primary->get_sample_rate(primary);
@@ -67,6 +70,7 @@ static uint32_t out_get_sample_rate(const struct audio_stream *stream)
 
 static int out_set_sample_rate(struct audio_stream *stream, uint32_t rate)
 {
+    ALOGV("%s %p %d", __func__, stream, rate);
      struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
      struct audio_stream *primary = &scr_stream->primary->common;
 
@@ -79,6 +83,7 @@ static int out_set_sample_rate(struct audio_stream *stream, uint32_t rate)
 
 static size_t out_get_buffer_size(const struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     return primary->get_buffer_size(primary);
@@ -86,6 +91,7 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
 
 static uint32_t out_get_channels(const struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     return primary->get_channels(primary);
@@ -93,6 +99,7 @@ static uint32_t out_get_channels(const struct audio_stream *stream)
 
 static audio_format_t out_get_format(const struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     return primary->get_format(primary);
@@ -100,6 +107,7 @@ static audio_format_t out_get_format(const struct audio_stream *stream)
 
 static int out_set_format(struct audio_stream *stream, audio_format_t format)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (scr_stream == scr_stream->dev->recorded_stream) {
@@ -111,6 +119,7 @@ static int out_set_format(struct audio_stream *stream, audio_format_t format)
 
 static int out_standby(struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (scr_stream == scr_stream->dev->recorded_stream) {
@@ -121,6 +130,7 @@ static int out_standby(struct audio_stream *stream)
 
 static int out_dump(const struct audio_stream *stream, int fd)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     return primary->dump(primary, fd);
@@ -128,6 +138,7 @@ static int out_dump(const struct audio_stream *stream, int fd)
 
 static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 {
+    ALOGV("%s %p %s", __func__, stream, kvpairs);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     ALOGV("out_set_parameters: %s", kvpairs);
@@ -136,6 +147,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 
 static char * out_get_parameters(const struct audio_stream *stream, const char *keys)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     return primary->get_parameters(primary, keys);
@@ -151,6 +163,7 @@ static uint32_t out_get_latency(const struct audio_stream_out *stream)
 static int out_set_volume(struct audio_stream_out *stream, float left,
                           float right)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream_out *primary = scr_stream->primary;
     return primary->set_volume(primary, left, right);
@@ -208,6 +221,7 @@ static int out_get_render_position(const struct audio_stream_out *stream,
 
 static int out_add_audio_effect(const struct audio_stream *stream, effect_handle_t effect)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     return primary->add_audio_effect(primary, effect);
@@ -215,6 +229,7 @@ static int out_add_audio_effect(const struct audio_stream *stream, effect_handle
 
 static int out_remove_audio_effect(const struct audio_stream *stream, effect_handle_t effect)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     return primary->remove_audio_effect(primary, effect);
@@ -231,6 +246,7 @@ static int out_get_next_write_timestamp(const struct audio_stream_out *stream,
 /** audio_stream_in implementation **/
 static uint32_t in_get_sample_rate(const struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -240,6 +256,7 @@ static uint32_t in_get_sample_rate(const struct audio_stream *stream)
 
 static int in_set_sample_rate(struct audio_stream *stream, uint32_t rate)
 {
+    ALOGV("%s %p %d", __func__, stream, rate);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -253,6 +270,7 @@ static int in_set_sample_rate(struct audio_stream *stream, uint32_t rate)
 
 static size_t in_get_buffer_size(const struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -264,6 +282,7 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
 
 static uint32_t in_get_channels(const struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -273,6 +292,7 @@ static uint32_t in_get_channels(const struct audio_stream *stream)
 
 static audio_format_t in_get_format(const struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -282,6 +302,7 @@ static audio_format_t in_get_format(const struct audio_stream *stream)
 
 static int in_set_format(struct audio_stream *stream, audio_format_t format)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -293,6 +314,7 @@ static int in_set_format(struct audio_stream *stream, audio_format_t format)
 
 static int in_standby(struct audio_stream *stream)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct scr_audio_device *device = scr_stream->dev;
     struct audio_stream *primary = &scr_stream->primary->common;
@@ -306,6 +328,7 @@ static int in_standby(struct audio_stream *stream)
 
 static int in_dump(const struct audio_stream *stream, int fd)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -315,6 +338,7 @@ static int in_dump(const struct audio_stream *stream, int fd)
 
 static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
 {
+    ALOGV("%s %p %s", __func__, stream, kvpairs);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -326,6 +350,7 @@ static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
 static char * in_get_parameters(const struct audio_stream *stream,
                                 const char *keys)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -335,6 +360,7 @@ static char * in_get_parameters(const struct audio_stream *stream,
 
 static int in_set_gain(struct audio_stream_in *stream, float gain)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream_in *primary = scr_stream->primary;
     if (primary)
@@ -443,6 +469,7 @@ static uint32_t in_get_input_frames_lost(struct audio_stream_in *stream)
 
 static int in_add_audio_effect(const struct audio_stream *stream, effect_handle_t effect)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -452,6 +479,7 @@ static int in_add_audio_effect(const struct audio_stream *stream, effect_handle_
 
 static int in_remove_audio_effect(const struct audio_stream *stream, effect_handle_t effect)
 {
+    ALOGV("%s %p", __func__, stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
@@ -466,6 +494,7 @@ static int adev_open_output_stream(struct audio_hw_device *device,
                                    struct audio_config *config,
                                    struct audio_stream_out **stream_out)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     ALOGV("adev_open_output_stream %d, sample_rate: %d", scr_dev->num_out_streams, config->sample_rate);
@@ -507,6 +536,8 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     }
 
     *stream_out = &out->stream;
+    ALOGV("%s stream out: %p", __func__, out);
+    ALOGV("%s primary stream: %p", __func__, out->primary);
     return 0;
 
 err_open:
@@ -518,10 +549,13 @@ err_open:
 static void adev_close_output_stream(struct audio_hw_device *device,
                                      struct audio_stream_out *stream)
 {
+    ALOGV("%s %p %p", __func__, device, stream);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream_out *primary_stream = scr_stream->primary;
+    ALOGV("%s primary: %p primary_stream: %p", __func__, primary, primary_stream);
+    ALOGV("%s primary close_output_stream: %p ", __func__, primary->close_output_stream);
     primary->close_output_stream(primary, primary_stream);
     if (scr_dev->recorded_stream == scr_stream) {
         scr_dev->recorded_stream = NULL;
@@ -531,6 +565,7 @@ static void adev_close_output_stream(struct audio_hw_device *device,
 
 static int adev_set_parameters(struct audio_hw_device *device, const char *kvpairs)
 {
+    ALOGV("%s %p %s", __func__, device, kvpairs);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->set_parameters(primary, kvpairs);
@@ -539,6 +574,7 @@ static int adev_set_parameters(struct audio_hw_device *device, const char *kvpai
 static char * adev_get_parameters(const struct audio_hw_device *device,
                                   const char *keys)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->get_parameters(primary, keys);
@@ -546,6 +582,7 @@ static char * adev_get_parameters(const struct audio_hw_device *device,
 
 static int adev_init_check(const struct audio_hw_device *device)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->init_check(primary);
@@ -553,6 +590,7 @@ static int adev_init_check(const struct audio_hw_device *device)
 
 static int adev_set_voice_volume(struct audio_hw_device *device, float volume)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->set_voice_volume(primary, volume);
@@ -560,6 +598,7 @@ static int adev_set_voice_volume(struct audio_hw_device *device, float volume)
 
 static int adev_set_master_volume(struct audio_hw_device *device, float volume)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->set_master_volume(primary, volume);
@@ -568,6 +607,7 @@ static int adev_set_master_volume(struct audio_hw_device *device, float volume)
 static int adev_get_master_volume(struct audio_hw_device *device,
                                   float *volume)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->get_master_volume(primary, volume);
@@ -575,6 +615,7 @@ static int adev_get_master_volume(struct audio_hw_device *device,
 
 static int adev_set_mode(struct audio_hw_device *device, audio_mode_t mode)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->set_mode(primary, mode);
@@ -582,6 +623,7 @@ static int adev_set_mode(struct audio_hw_device *device, audio_mode_t mode)
 
 static int adev_set_mic_mute(struct audio_hw_device *device, bool state)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->set_mic_mute(primary, state);
@@ -589,6 +631,7 @@ static int adev_set_mic_mute(struct audio_hw_device *device, bool state)
 
 static int adev_get_mic_mute(const struct audio_hw_device *device, bool *state)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->get_mic_mute(primary, state);
@@ -597,6 +640,7 @@ static int adev_get_mic_mute(const struct audio_hw_device *device, bool *state)
 static size_t adev_get_input_buffer_size(const struct audio_hw_device *device,
                                          const struct audio_config *config)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     return primary->get_input_buffer_size(primary, config);
@@ -608,7 +652,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
                                   struct audio_config *config,
                                   struct audio_stream_in **stream_in)
 {
-    ALOGV("adev_open_input_stream");
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     struct scr_stream_in *in;
@@ -635,6 +679,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     in->stream.get_input_frames_lost = in_get_input_frames_lost;
 
     if (config->sample_rate >= 44100) {
+        ALOGV("%s scr input stream", __func__);
         if (scr_dev->recorded_stream == NULL) {
             ALOGE("output stream not ready!");
             return EINVAL;
@@ -646,10 +691,12 @@ static int adev_open_input_stream(struct audio_hw_device *device,
         in->sample_rate = scr_dev->recorded_stream->stream.common.get_sample_rate(&scr_dev->recorded_stream->stream.common);
         config->sample_rate = in->sample_rate;
     } else {
+        ALOGV("%s standard input stream", __func__);
         ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
     }
 
     *stream_in = &in->stream;
+    ALOGV("%s returning stream %p", __func__, in);
     return 0;
 
 err_open:
@@ -679,6 +726,7 @@ static void adev_close_input_stream(struct audio_hw_device *device,
 
 static int adev_dump(const audio_hw_device_t *device, int fd)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     const audio_hw_device_t *primary = scr_dev->primary;
     return primary->dump(primary, fd);
@@ -686,6 +734,7 @@ static int adev_dump(const audio_hw_device_t *device, int fd)
 
 static int adev_close(hw_device_t *device)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     hw_device_t *primary = &scr_dev->primary->common;
     primary->close(primary);
@@ -695,9 +744,20 @@ static int adev_close(hw_device_t *device)
 
 static uint32_t adev_get_supported_devices(const struct audio_hw_device *device)
 {
+    ALOGV("%s %p", __func__, device);
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     const audio_hw_device_t *primary = scr_dev->primary;
     return primary->get_supported_devices(primary);
+}
+
+static void print_pointer_name(char *expected, void *addr) {
+    Dl_info info;
+    dladdr(addr, &info);
+    if (info.dli_sname == NULL) {
+        ALOGV("ptr   %s %p -> unknown", expected, addr);
+    } else {
+        ALOGV("ptr   %s %p -> %s", expected, addr, info.dli_sname);
+    }
 }
 
 static int adev_open(const hw_module_t* module, const char* name,
@@ -773,6 +833,26 @@ static int adev_open(const hw_module_t* module, const char* name,
     pthread_mutex_init(&adev->lock, NULL);
 
     *device = &adev->device.common;
+
+    print_pointer_name("get_supported_devices ", adev->primary->get_supported_devices);
+    print_pointer_name("init_check", adev->primary->init_check);
+    print_pointer_name("set_voice_volume", adev->primary->set_voice_volume);
+    print_pointer_name("set_mode", adev->primary->set_mode);
+    print_pointer_name("set_parameters", adev->primary->set_parameters);
+    print_pointer_name("get_parameters", adev->primary->get_parameters);
+    print_pointer_name("get_input_buffer_size", adev->primary->get_input_buffer_size);
+    print_pointer_name("open_output_stream", adev->primary->open_output_stream);
+    print_pointer_name("close_output_stream", adev->primary->close_output_stream);
+    print_pointer_name("open_input_stream", adev->primary->open_input_stream);
+    print_pointer_name("close_input_stream", adev->primary->close_input_stream);
+    print_pointer_name("dump", adev->primary->dump);
+    print_pointer_name("set_mic_mute", adev->primary->set_mic_mute);
+    print_pointer_name("get_mic_mute", adev->primary->get_mic_mute);
+    print_pointer_name("set_master_volume", adev->primary->set_master_volume);
+    print_pointer_name("get_master_volume", adev->primary->get_master_volume);
+
+    ALOGV("%s opened device: %p", __func__, adev);
+    ALOGV("%s primary device: %p", __func__, adev->primary);
 
     return 0;
 }
