@@ -553,7 +553,7 @@ static void adev_close_output_stream(struct audio_hw_device *device,
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
-    struct audio_stream_out *primary_stream = scr_stream->primary;
+    struct audio_stream_out *primary_stream = scr_stream == NULL ? NULL : scr_stream->primary;
     ALOGV("%s primary: %p primary_stream: %p", __func__, primary, primary_stream);
     ALOGV("%s primary close_output_stream: %p ", __func__, primary->close_output_stream);
     primary->close_output_stream(primary, primary_stream);
@@ -712,7 +712,7 @@ static void adev_close_input_stream(struct audio_hw_device *device,
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)in;
     audio_hw_device_t *primary_dev = scr_dev->primary;
-    struct audio_stream_in *primary_stream = scr_stream->primary;
+    struct audio_stream_in *primary_stream = scr_stream == NULL ? NULL : scr_stream->primary;
     if (primary_stream != NULL) {
         primary_dev->close_input_stream(primary_dev, primary_stream);
     } else {
