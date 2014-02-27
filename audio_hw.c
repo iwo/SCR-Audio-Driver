@@ -522,9 +522,12 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     out->stream.set_volume = out_set_volume;
     out->stream.write = out_write;
     out->stream.get_render_position = out_get_render_position;
-    out->stream.get_next_write_timestamp = out_get_next_write_timestamp;
 
     primary->open_output_stream(primary, handle, devices, flags, config, &out->primary);
+
+    if (out->primary->get_next_write_timestamp != NULL) {
+        out->stream.get_next_write_timestamp = out_get_next_write_timestamp;
+    }
 
     out->dev = scr_dev;
     out->stream_no = scr_dev->num_out_streams++;
@@ -783,7 +786,6 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->device.common.module = (struct hw_module_t *) module;
     adev->device.common.close = adev_close;
 
-    adev->device.get_supported_devices = adev_get_supported_devices;
     adev->device.init_check = adev_init_check;
     adev->device.set_voice_volume = adev_set_voice_volume;
     adev->device.set_mode = adev_set_mode;
@@ -817,6 +819,9 @@ static int adev_open(const hw_module_t* module, const char* name,
         return ret;
     }
 
+    if (adev->primary->get_supported_devices != NULL) {
+        adev->device.get_supported_devices = adev_get_supported_devices;
+    }
     if (adev->primary->set_mic_mute != NULL) {
         adev->device.set_mic_mute = adev_set_mic_mute;
     }
