@@ -18,6 +18,8 @@
 
 #define BUFFER_SIZE (16 * 1024)
 #define MAX_WAIT_READ_RETRY 10
+// maximum number of buffers which may be passed simultaneously on out wakeup
+#define MAX_OUT_WAKE_UP_BUFFERS 3
 
 struct scr_audio_device {
     struct audio_hw_device device;
@@ -58,6 +60,10 @@ int64_t get_time_us() {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return now.tv_sec * 1000000l + now.tv_nsec / 1000l;
+}
+
+static int get_available_frames(struct scr_audio_device *device, size_t frame_size) {
+    return (device->buffer_end + BUFFER_SIZE - device->buffer_start) % BUFFER_SIZE;
 }
 
 static uint32_t out_get_sample_rate(const struct audio_stream *stream)
@@ -160,43 +166,50 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
 static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                          size_t bytes)
 {
+    ALOGV("%s %p %p %d", __func__, stream, buffer, bytes);
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream_out *primary = scr_stream->primary;
     struct scr_audio_device *device = scr_stream->dev;
 
-    if (device->recorded_stream == scr_stream && device->in_open) {
+    pthread_mutex_lock(&device->lock);
+    if (!device->out_active) {
+        device->out_active = true;
+        device->buffer_start = 0;
+        device->buffer_end = 0;
+        ALOGD("Output marked active");
+    }
+    pthread_mutex_unlock(&device->lock);
+
+    ssize_t result = primary->write(primary, buffer, bytes);
+    ALOGV("%s result: %d", __func__, result);
+
+    if (result > 0 && device->recorded_stream == scr_stream && device->in_open) {
 
         int frame_size = audio_stream_frame_size(&primary->common);
-        int frames_count = bytes / frame_size;
-
-        //ALOGV(" %d out_write  %d", scr_stream->stream_no, frameCount);
-
+        int frames_count = result / frame_size;
         int16_t *frames = (int16_t *)buffer;
+        int i = 0;
 
         pthread_mutex_lock(&device->lock);
 
-        if (!device->out_active) {
-            device->out_active = true;
-            device->buffer_start = 0;
-            device->buffer_end = 0;
-            ALOGV("out active! writing %d frames", frames_count);
+        if (get_available_frames(device, frame_size) + frames_count > BUFFER_SIZE) {
+            ALOGE("SCR driver buffer overrun!");
         }
 
-        int i = 0;
         for (i = 0; i < frames_count; i++) {
+            //TODO: multiply by volume boost
             if (frame_size == 4) { // down mix 16bit stereo
                 device->buffer[device->buffer_end] = (frames[2*i] + frames[2*i + 1]) / 2;
             } else {
                 device->buffer[device->buffer_end] = frames[i];
             }
 
-            device->buffer_end = (device->buffer_end + 1) % BUFFER_SIZE; // TODO: handle overrun
+            device->buffer_end = (device->buffer_end + 1) % BUFFER_SIZE;
         }
         pthread_mutex_unlock(&device->lock);
 
     }
-    //ALOGD("out_write frameCount: %d, start: %d, end: %d", frameCount, device->buffer_start, device->buffer_end);
-    return primary->write(primary, buffer, bytes);
+    return result;
 }
 
 static int out_get_render_position(const struct audio_stream_out *stream,
@@ -259,7 +272,14 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
     if (primary)
         return primary->get_buffer_size(primary);
 
-    struct audio_stream *out_stream = &scr_stream->dev->recorded_stream->stream.common;
+    struct scr_stream_out *scr_stream_out = scr_stream->dev->recorded_stream;
+    if (scr_stream_out == NULL) {
+        return 1024;
+    }
+    struct audio_stream *out_stream = &scr_stream_out->stream.common;
+    if (audio_stream_frame_size(out_stream) == 4) {
+        return out_stream->get_buffer_size(out_stream) / 2; // downmixing stereo to mono
+    }
     return out_stream->get_buffer_size(out_stream);
 }
 
@@ -343,13 +363,10 @@ static int in_set_gain(struct audio_stream_in *stream, float gain)
     return 0;
 }
 
-static int get_available_frames(struct scr_audio_device *device, size_t frame_size) {
-    return (device->buffer_end + BUFFER_SIZE - device->buffer_start) % BUFFER_SIZE;
-}
-
 static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
                        size_t bytes)
 {
+    ALOGV("in_read %d bytes", bytes);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream_in *primary = scr_stream->primary;
     struct scr_audio_device *device = scr_stream->dev;
@@ -358,18 +375,25 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
 
     int64_t start_time = get_time_us();
 
-    //ALOGD("in_read");
     pthread_mutex_lock(&device->lock);
 
     int frame_size = audio_stream_frame_size(&stream->common);
     int frames_to_read = bytes / frame_size;
     int sample_rate = scr_stream->sample_rate;
     int available_frames = get_available_frames(device, frame_size);
+    int64_t duration = frames_to_read * 1000000ll / sample_rate; //TODO: use standard time functions and types
 
     if (!device->in_active) {
         device->in_active = true;
         scr_stream->in_start_us = get_time_us();
         scr_stream->frames_read = 0;
+
+        pthread_mutex_unlock(&device->lock);
+        ALOGV("sleep %lld ms", duration);
+        usleep(duration);
+        pthread_mutex_lock(&device->lock);
+        available_frames = get_available_frames(device, frame_size);
+
         if (available_frames > frames_to_read) {
             //skip excess frames
             device->buffer_start = (device->buffer_start + available_frames - frames_to_read) % BUFFER_SIZE;
@@ -378,34 +402,46 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
     }
 
     int64_t ret_time = scr_stream->in_start_us + (scr_stream->frames_read + frames_to_read) * 1000000ll / sample_rate;
+    int64_t now = get_time_us();
+
+    pthread_mutex_unlock(&device->lock);
+    if (ret_time > now) {
+        ALOGV("sleep %lld ms", (ret_time - now) / 1000);
+        usleep(ret_time - now);
+    } else {
+        usleep(1000); // give 1ms time for consumer to catch up
+    }
+    pthread_mutex_lock(&device->lock);
+
+    available_frames = get_available_frames(device, frame_size);
 
     if (available_frames > 4 * frames_to_read) {
         ALOGW("available excess frames %d. This may cause buffer overrun in RecordThread", available_frames);
     }
 
-    int64_t now = get_time_us();
-    if (available_frames < frames_to_read && ret_time > now) {
-        pthread_mutex_unlock(&device->lock);
-        //ALOGV("sleep %lld ms", (ret_time - now) / 1000);
-        usleep(ret_time - now);
-        pthread_mutex_lock(&device->lock);
-    }
-
-    available_frames = get_available_frames(device, frame_size);
-
     if (available_frames < frames_to_read) {
-        memset(buffer, 0, bytes);
+        memset(buffer, 0, bytes); //TODO: shouldn't we reset to 16bit 0?
+        //TODO: move to memcpy below
+
         if (device->out_active) {
+            //TODO: replace loops below with single consistent loop
             if (scr_stream->recording_silence) {
-                // output just started, record silence now and full buffer of data in next run
-                available_frames = 0;
+                // output just started, allow some time for output streem initialization
+                // later the output stream may catch up by accepting couple buffers one by one
+                int buffers_waited = 0;
+                while (device->out_active && ++buffers_waited < MAX_OUT_WAKE_UP_BUFFERS && available_frames < frames_to_read) {
+                    pthread_mutex_unlock(&device->lock);
+                    ALOGD("out wakeup wait %lld ms", buffers_waited * duration / 1000);
+                    usleep(duration);
+                    pthread_mutex_lock(&device->lock);
+                    available_frames = get_available_frames(device, frame_size);
+                }
             } else {
                 int attempts = 0;
-                int sleep_time = frames_to_read * 1000000 / sample_rate;
                 while (device->out_active && ++attempts < MAX_WAIT_READ_RETRY && available_frames < frames_to_read) {
                     pthread_mutex_unlock(&device->lock);
-                    ALOGV("wait extra %d ms", attempts * sleep_time / 1000);
-                    usleep(sleep_time);
+                    ALOGW("wait extra %lld ms", attempts * duration / 1000);
+                    usleep(duration);
                     pthread_mutex_lock(&device->lock);
                     available_frames = get_available_frames(device, frame_size);
                 }
@@ -417,8 +453,24 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
         }
     }
 
-    scr_stream->recording_silence = (available_frames < frames_to_read);
+    now = get_time_us();
+    int frames_to_catch_up = ((now - ret_time) * (int64_t) sample_rate) / 1000000ll + frames_to_read; //TODO: make sure that we need this one buffer padding
 
+    if (scr_stream->recording_silence && device->out_active && available_frames > 0 && available_frames < frames_to_catch_up) {
+        ALOGD("not enough frames available %d should be %d, writing silence", available_frames, frames_to_catch_up);
+        available_frames = 0;
+    }
+
+    if (scr_stream->recording_silence != (available_frames < frames_to_read)) {
+        if (scr_stream->recording_silence) {
+            ALOGD("Silence finished");
+        } else {
+            ALOGD("Starting recording silence");
+        }
+        scr_stream->recording_silence = !scr_stream->recording_silence;
+    }
+
+    //TODO: replace with memcpy
     int16_t *buff = (int16_t *)buffer;
     int frames_read = 0;
     for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
@@ -428,7 +480,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
 
     scr_stream->frames_read += frames_to_read;
     pthread_mutex_unlock(&device->lock);
-    //ALOGV("read %d frames in %lldms. expected duration %dms. remaining %d frames", bytes / 2, (get_time_us() - start_time) / 1000ll, bytes / 2 * 1000 / sample_rate, get_available_frames(device, frame_size));
+    ALOGV("read %d frames in %lldms. expected duration %lldms. remaining %d frames total %lld", frames_to_read, (get_time_us() - start_time) / 1000ll, duration / 1000ll, get_available_frames(device, frame_size), scr_stream->frames_read);
     return bytes;
 }
 
