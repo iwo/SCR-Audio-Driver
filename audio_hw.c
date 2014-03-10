@@ -20,6 +20,8 @@
 #define MAX_WAIT_READ_RETRY 10
 // maximum number of buffers which may be passed simultaneously on out wakeup
 #define MAX_OUT_WAKE_UP_BUFFERS 3
+// buffer size should be above 10ms to avoid scheduling related issues
+#define MIN_BUFFER_SIZE 440
 
 struct scr_audio_device {
     struct audio_hw_device device;
@@ -274,13 +276,16 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
 
     struct scr_stream_out *scr_stream_out = scr_stream->dev->recorded_stream;
     if (scr_stream_out == NULL) {
-        return 1024;
+        return 2048;
     }
     struct audio_stream *out_stream = &scr_stream_out->stream.common;
-    if (audio_stream_frame_size(out_stream) == 4) {
-        return out_stream->get_buffer_size(out_stream) / 2; // downmixing stereo to mono
+    size_t out_size = out_stream->get_buffer_size(out_stream) / audio_stream_frame_size(out_stream);
+    size_t in_size = out_size;
+    while (in_size < MIN_BUFFER_SIZE) {
+        in_size += out_size;
     }
-    return out_stream->get_buffer_size(out_stream);
+    ALOGD("Setting buffer size to %d frames (output  %d)", in_size, out_size);
+    return in_size * audio_stream_frame_size(stream);
 }
 
 static uint32_t in_get_channels(const struct audio_stream *stream)
@@ -656,7 +661,14 @@ static size_t adev_get_input_buffer_size(const struct audio_hw_device *device,
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary;
-    return primary->get_input_buffer_size(primary, config);
+    struct scr_stream_out *recorded_stream = scr_dev->recorded_stream;
+    // return something big to avoid buffer overruns
+    // the actual size will be returned from in_get_buffer_size
+    if (recorded_stream != NULL) {
+        struct audio_stream* stream = &recorded_stream->stream.common;
+        return 4 * stream->get_buffer_size(stream);
+    }
+    return 8 * 2048;
 }
 
 static int adev_open_input_stream(struct audio_hw_device *device,
