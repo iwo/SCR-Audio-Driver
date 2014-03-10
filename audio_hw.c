@@ -480,7 +480,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
 
     scr_stream->frames_read += frames_to_read;
     pthread_mutex_unlock(&device->lock);
-    ALOGV("read %d frames in %lldms. expected duration %lldms. remaining %d frames total %lld", frames_to_read, (get_time_us() - start_time) / 1000ll, duration / 1000ll, get_available_frames(device, frame_size), scr_stream->frames_read);
+    ALOGV("read [%d/%d] frames in %lld ms. Latency %lld ms. Remaining %d frames total %lld", frames_read, frames_to_read - frames_read, (get_time_us() - start_time) / 1000ll, (get_time_us() - ret_time) / 1000ll, get_available_frames(device, frame_size), scr_stream->frames_read);
     return bytes;
 }
 
