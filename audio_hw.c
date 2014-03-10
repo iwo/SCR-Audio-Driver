@@ -181,7 +181,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
     pthread_mutex_unlock(&device->lock);
 
     ssize_t result = primary->write(primary, buffer, bytes);
-    ALOGV("%s result: %zd", __func__, result);
+    ALOGV("%s result: %d", __func__, (int) result);
 
     if (result > 0 && device->recorded_stream == scr_stream && device->in_open) {
 
