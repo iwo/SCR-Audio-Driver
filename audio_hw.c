@@ -17,7 +17,8 @@
 #include <dlfcn.h>
 
 #define BUFFER_SIZE (16 * 1024)
-#define MAX_WAIT_READ_RETRY 10
+#define MAX_WAIT_READ_RETRY 20
+#define READ_RETRY_WAIT 5000
 // maximum number of buffers which may be passed simultaneously on out wakeup
 #define MAX_OUT_WAKE_UP_BUFFERS 3
 // buffer size should be above 10ms to avoid scheduling related issues
@@ -480,13 +481,14 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
                 }
             } else {
                 int attempts = 0;
-                while (device->out_active && ++attempts < MAX_WAIT_READ_RETRY && available_frames < frames_to_read) {
+                while (device->out_active && attempts < MAX_WAIT_READ_RETRY && available_frames < frames_to_read) {
                     pthread_mutex_unlock(&device->lock);
-                    usleep(duration);
+                    attempts++;
+                    usleep(READ_RETRY_WAIT);
                     pthread_mutex_lock(&device->lock);
                     available_frames = get_available_frames(device, frame_size);
                 }
-                int latency = (attempts * duration / 1000ll);
+                int latency = (attempts * READ_RETRY_WAIT / 1000ll);
                 if (device->verbose_logging || scr_stream->stats_late_buffers < MAX_LOGS) {
                     ALOGW("waited extra %d ms", latency);
                 }
