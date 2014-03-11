@@ -46,6 +46,7 @@ struct scr_stream_out {
     struct audio_stream_out *primary;
     struct scr_audio_device *dev;
     int stream_no;
+    int stats_overflows;
 };
 
 struct scr_stream_in {
@@ -56,12 +57,21 @@ struct scr_stream_in {
     int64_t in_start_us;
     int64_t frames_read;
     bool recording_silence;
+    int stats_data;
+    int stats_silence;
+    int stats_in_buffer_size;
+    int stats_out_buffer_size;
+    int64_t stats_latency;
+    int stats_late_buffers;
+    int stats_start_latency;
+    int stats_starts;
+    int stats_delays;
 };
 
-int64_t get_time_us() {
+static inline int64_t get_time_us() {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    return now.tv_sec * 1000000l + now.tv_nsec / 1000l;
+    return (int64_t) now.tv_sec * 1000000l + now.tv_nsec / 1000l;
 }
 
 static int get_available_frames(struct scr_audio_device *device, size_t frame_size) {
@@ -196,6 +206,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
 
         if (get_available_frames(device, frame_size) + frames_count > BUFFER_SIZE) {
             ALOGE("SCR driver buffer overrun!");
+            scr_stream->stats_overflows++;
         }
 
         for (i = 0; i < frames_count; i++) {
@@ -391,7 +402,8 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
     if (!device->in_active) {
         device->in_active = true;
         scr_stream->in_start_us = get_time_us();
-        scr_stream->frames_read = 0;
+        scr_stream->frames_read = 0L;
+        scr_stream->stats_in_buffer_size = frames_to_read;
 
         pthread_mutex_unlock(&device->lock);
         ALOGV("sleep %lld ms", duration);
@@ -450,25 +462,36 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
                     pthread_mutex_lock(&device->lock);
                     available_frames = get_available_frames(device, frame_size);
                 }
+                scr_stream->stats_latency += (attempts * duration / 1000);
+                scr_stream->stats_late_buffers++;
                 if (attempts == MAX_WAIT_READ_RETRY && available_frames < frames_to_read) {
                     ALOGE("output data not received on time. available %d", available_frames);
                     // will record remaining frames and start recording silence
+                    scr_stream->stats_delays++;
                 }
             }
         }
     }
 
-    now = get_time_us();
-    int frames_to_catch_up = ((now - ret_time) * (int64_t) sample_rate) / 1000000ll + frames_to_read; //TODO: make sure that we need this one buffer padding
+    if (scr_stream->recording_silence && device->out_active) {
+        now = get_time_us();
+        int frames_to_catch_up = ((now - ret_time) * (int64_t) sample_rate) / 1000000ll + frames_to_read; //TODO: make sure that we need this one buffer padding
 
-    if (scr_stream->recording_silence && device->out_active && available_frames > 0 && available_frames < frames_to_catch_up) {
-        ALOGD("not enough frames available %d should be %d, writing silence", available_frames, frames_to_catch_up);
-        available_frames = 0;
+        if (available_frames < frames_to_catch_up) {
+            ALOGD("not enough frames available %d should be %d, writing silence", available_frames, frames_to_catch_up);
+            scr_stream->stats_start_latency += (int64_t) duration / 1000ll;
+            available_frames = 0;
+        }
     }
+
+    bool latency_reported = false;
 
     if (scr_stream->recording_silence != (available_frames < frames_to_read)) {
         if (scr_stream->recording_silence) {
             ALOGD("Silence finished");
+            latency_reported = true;
+            scr_stream->stats_starts++;
+            scr_stream->stats_start_latency += (now - ret_time) / 1000ll;
         } else {
             ALOGD("Starting recording silence");
         }
@@ -485,7 +508,16 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
 
     scr_stream->frames_read += frames_to_read;
     pthread_mutex_unlock(&device->lock);
-    ALOGV("read [%d/%d] frames in %lld ms. Latency %lld ms. Remaining %d frames total %lld", frames_read, frames_to_read - frames_read, (get_time_us() - start_time) / 1000ll, (get_time_us() - ret_time) / 1000ll, get_available_frames(device, frame_size), scr_stream->frames_read);
+
+    if (frames_read > 0) {
+        scr_stream->stats_data++;
+    } else {
+        scr_stream->stats_silence++;
+    }
+    now = get_time_us();
+    int duration_ms = (now - start_time) / 1000ll;
+    int latency_ms = (now - ret_time) / 1000ll;
+    ALOGV("read [%d/%d] frames in %d ms. Latency %d ms. Remaining %d frames", frames_read, frames_to_read - frames_read, duration_ms, latency_ms, get_available_frames(device, frame_size));
     return bytes;
 }
 
@@ -712,11 +744,12 @@ static int adev_open_input_stream(struct audio_hw_device *device,
         in->dev = scr_dev;
         scr_dev->in_open = true;
 
-        in->sample_rate = scr_dev->recorded_stream->stream.common.get_sample_rate(&scr_dev->recorded_stream->stream.common);
+        struct audio_stream *as = &scr_dev->recorded_stream->stream.common;
+        in->sample_rate = as->get_sample_rate(as);
+        in->stats_out_buffer_size = as->get_buffer_size(as) / audio_stream_frame_size(as);
         config->sample_rate = in->sample_rate;
     } else {
         ALOGV("%s standard input stream", __func__);
-        int64_t start = get_time_us();
         ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
     }
 
@@ -743,6 +776,22 @@ static void adev_close_input_stream(struct audio_hw_device *device,
         pthread_mutex_lock(&scr_dev->lock);
         scr_dev->in_open = false;
         pthread_mutex_unlock(&scr_dev->lock);
+        int avg_latency = scr_stream->stats_late_buffers == 0 ? 0 : scr_stream->stats_latency / (int64_t) scr_stream->stats_late_buffers;
+        int start_avg_latency = scr_stream->stats_starts == 0 ? 0 : scr_stream->stats_start_latency / scr_stream->stats_starts;
+        int overflows = scr_dev->recorded_stream == NULL ? 0 : scr_dev->recorded_stream->stats_overflows;
+        ALOGD("Stats %lld [%d/%d] in:%d out:%d late:%d (%d ms) starts:%d (%d ms) delays:%d overflows:%d",
+            scr_stream->frames_read,
+            scr_stream->stats_data,
+            scr_stream->stats_silence,
+            scr_stream->stats_in_buffer_size,
+            scr_stream->stats_out_buffer_size,
+            scr_stream->stats_late_buffers,
+            avg_latency,
+            scr_stream->stats_starts,
+            start_avg_latency,
+            scr_stream->stats_delays,
+            overflows
+        );
     }
     free(in);
     return;
