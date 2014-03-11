@@ -37,8 +37,10 @@ struct scr_audio_device {
     bool in_active;
     bool in_open;
 
-    int num_out_streams;
     bool verbose_logging;
+    int volume_boost;
+
+    int num_out_streams;
     struct scr_stream_out *recorded_stream;
     pthread_mutex_t lock;
 };
@@ -219,12 +221,12 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             scr_stream->stats_overflows++;
         }
 
+        int volume_boost = device->volume_boost;
         for (i = 0; i < frames_count; i++) {
-            //TODO: multiply by volume boost
             if (frame_size == 4) { // down mix 16bit stereo
-                device->buffer[device->buffer_end] = (frames[2*i] + frames[2*i + 1]) / 2;
+                device->buffer[device->buffer_end] = (frames[2*i] + frames[2*i + 1]) * volume_boost / 2 ;
             } else {
-                device->buffer[device->buffer_end] = frames[i];
+                device->buffer[device->buffer_end] = frames[i] * volume_boost;
             }
 
             device->buffer_end = (device->buffer_end + 1) % BUFFER_SIZE;
@@ -903,6 +905,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->in_open = false;
     adev->in_active = false;
     adev->out_active = false;
+    adev->volume_boost = 4; // fixed value for now
 
     const struct hw_module_t *primaryModule;
     ret = hw_get_module_by_class("audio", "original_primary", &primaryModule);
