@@ -430,9 +430,10 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
         pthread_mutex_lock(&device->lock);
         available_frames = get_available_frames(device, frame_size);
 
-        if (available_frames > frames_to_read) {
+        int initial_frames = (frames_to_read + frames_to_read / 2);
+        if (available_frames > initial_frames) {
             //skip excess frames
-            device->buffer_start = (device->buffer_start + available_frames - frames_to_read) % BUFFER_SIZE;
+            device->buffer_start = (device->buffer_start + available_frames - initial_frames) % BUFFER_SIZE;
             available_frames = get_available_frames(device, frame_size);
         }
     }
