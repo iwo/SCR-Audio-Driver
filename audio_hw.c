@@ -208,6 +208,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
         ALOGV("%s result: %d", __func__, (int) result);
     }
 
+    pthread_mutex_lock(&device->lock);
     if (result > 0 && device->recorded_stream == scr_stream && device->in_open) {
 
         int frame_size = audio_stream_frame_size(&primary->common);
@@ -215,11 +216,12 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
         int16_t *frames = (int16_t *)buffer;
         int i = 0;
 
-        pthread_mutex_lock(&device->lock);
-
         if (get_available_frames(device, frame_size) + frames_count > BUFFER_SIZE) {
-            ALOGE("SCR driver buffer overrun!");
-            scr_stream->stats_overflows++;
+            if (device->in_active) {
+                ALOGE("SCR driver buffer overrun!");
+                scr_stream->stats_overflows++;
+            }
+            device->buffer_start = (device->buffer_start + frames_count) % BUFFER_SIZE; // skip one oldest buffer
         }
 
         int volume_boost = device->volume_boost;
@@ -232,9 +234,8 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
 
             device->buffer_end = (device->buffer_end + 1) % BUFFER_SIZE;
         }
-        pthread_mutex_unlock(&device->lock);
-
     }
+    pthread_mutex_unlock(&device->lock);
     return result;
 }
 
@@ -417,7 +418,8 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
     int64_t duration = frames_to_read * 1000000ll / sample_rate; //TODO: use standard time functions and types
 
     if (!device->in_active) {
-        device->in_active = true;
+        ALOGD("Input active");
+        // in_active is set after initial sleep to avoid overflows at startup
         scr_stream->in_start_us = get_time_us();
         scr_stream->frames_read = 0L;
         scr_stream->stats_in_buffer_size = frames_to_read;
@@ -428,6 +430,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
         }
         usleep(duration);
         pthread_mutex_lock(&device->lock);
+        device->in_active = true;
         available_frames = get_available_frames(device, frame_size);
 
         int initial_frames = (frames_to_read + frames_to_read / 2);
@@ -820,10 +823,15 @@ static void adev_close_input_stream(struct audio_hw_device *device,
     } else {
         pthread_mutex_lock(&scr_dev->lock);
         scr_dev->in_open = false;
+        int overflows = 0;
+        if (scr_dev->recorded_stream != NULL) {
+            overflows = scr_dev->recorded_stream->stats_overflows;
+            scr_dev->recorded_stream->stats_overflows = 0;
+        }
         pthread_mutex_unlock(&scr_dev->lock);
         int avg_latency = scr_stream->stats_late_buffers == 0 ? 0 : scr_stream->stats_latency / (int64_t) scr_stream->stats_late_buffers;
         int start_avg_latency = scr_stream->stats_starts == 0 ? 0 : scr_stream->stats_start_latency / scr_stream->stats_starts;
-        int overflows = scr_dev->recorded_stream == NULL ? 0 : scr_dev->recorded_stream->stats_overflows;
+
         ALOGD("Stats %lld %d [%d/%d] in:%d out:%d late:%d (%d/%d ms) starts:%d (%d/%d ms) delays:%d overflows:%d excess:%d",
             scr_stream->frames_read,
             scr_stream->sample_rate,
