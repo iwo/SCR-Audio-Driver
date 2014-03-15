@@ -823,8 +823,9 @@ static void adev_close_input_stream(struct audio_hw_device *device,
         int avg_latency = scr_stream->stats_late_buffers == 0 ? 0 : scr_stream->stats_latency / (int64_t) scr_stream->stats_late_buffers;
         int start_avg_latency = scr_stream->stats_starts == 0 ? 0 : scr_stream->stats_start_latency / scr_stream->stats_starts;
         int overflows = scr_dev->recorded_stream == NULL ? 0 : scr_dev->recorded_stream->stats_overflows;
-        ALOGD("Stats %lld [%d/%d] in:%d out:%d late:%d (%d/%d ms) starts:%d (%d/%d ms) delays:%d overflows:%d excess:%d",
+        ALOGD("Stats %lld %d [%d/%d] in:%d out:%d late:%d (%d/%d ms) starts:%d (%d/%d ms) delays:%d overflows:%d excess:%d",
             scr_stream->frames_read,
+            scr_stream->sample_rate,
             scr_stream->stats_data,
             scr_stream->stats_silence,
             scr_stream->stats_in_buffer_size,
@@ -839,6 +840,33 @@ static void adev_close_input_stream(struct audio_hw_device *device,
             overflows,
             scr_stream->stats_excess
         );
+
+        FILE *log = fopen("/system/lib/hw/scr_audio.log", "a");
+
+        if (log == NULL) {
+            ALOGW("Can't open log file %s", strerror(errno));
+        } else {
+            int now = time(NULL);
+            fprintf(log, "%d %lld %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+                now,
+                scr_stream->frames_read,
+                scr_stream->sample_rate,
+                scr_stream->stats_data,
+                scr_stream->stats_silence,
+                scr_stream->stats_in_buffer_size,
+                scr_stream->stats_out_buffer_size,
+                scr_stream->stats_late_buffers,
+                avg_latency,
+                scr_stream->stats_latency_max,
+                scr_stream->stats_starts,
+                start_avg_latency,
+                scr_stream->stats_start_latency_max,
+                scr_stream->stats_delays,
+                overflows,
+                scr_stream->stats_excess
+            );
+            fclose(log);
+        }
     }
     free(in);
     return;
