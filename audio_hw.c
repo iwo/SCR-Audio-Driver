@@ -40,7 +40,6 @@ struct scr_audio_device {
     bool in_open;
 
     bool verbose_logging;
-    int volume_boost;
 
     int num_out_streams;
     struct scr_stream_out *recorded_stream;
@@ -60,6 +59,7 @@ struct scr_stream_in {
     struct audio_stream_in *primary;
     struct scr_audio_device *dev;
     uint32_t sample_rate;
+    int volume_gain;
     int64_t in_start_us;
     int64_t frames_read;
     bool recording_silence;
@@ -553,13 +553,20 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
     int16_t *buff = (int16_t *)buffer;
     int frames_read = 0;
     for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
+        int sample = 0;
         if (out_channels == 1) {
-            buff[frames_read] = device->buffer[device->buffer_start] * device->volume_boost;
+            sample = device->buffer[device->buffer_start] * scr_stream->volume_gain;
             device->buffer_start = (device->buffer_start + 1) % BUFFER_SIZE;
         } else { // out_channels == 2
-            buff[frames_read] = (device->buffer[device->buffer_start] + device->buffer[(device->buffer_start + 1) % BUFFER_SIZE]) * device->volume_boost / 2;
+            sample = (device->buffer[device->buffer_start] + device->buffer[(device->buffer_start + 1) % BUFFER_SIZE]) * scr_stream->volume_gain / 2;
             device->buffer_start = (device->buffer_start + 2) % BUFFER_SIZE;
         }
+        if (sample > INT16_MAX || sample < INT16_MIN) {
+            sample = sample / scr_stream->volume_gain * (scr_stream->volume_gain - 1);
+            scr_stream->volume_gain--;
+            ALOGW("Reducing volume gain to %d", scr_stream->volume_gain);
+        }
+        buff[frames_read] = sample;
     }
 
     scr_stream->frames_read += frames_to_read;
@@ -801,6 +808,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
         in->primary = NULL;
         in->dev = scr_dev;
         scr_dev->in_open = true;
+        in->volume_gain = 4; // fixed value for now
 
         struct audio_stream *as = &scr_dev->recorded_stream->stream.common;
         in->sample_rate = as->get_sample_rate(as);
@@ -955,7 +963,6 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->in_open = false;
     adev->in_active = false;
     adev->out_active = false;
-    adev->volume_boost = 4; // fixed value for now
     adev->verbose_logging = false;
 
     const struct hw_module_t *primaryModule;
