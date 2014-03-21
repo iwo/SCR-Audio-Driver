@@ -768,6 +768,29 @@ static size_t adev_get_input_buffer_size(const struct audio_hw_device *device,
     return 8 * 2048;
 }
 
+static int get_volume_gain() {
+    FILE* f = fopen("/system/lib/hw/scr_audio.conf", "r");
+    int gain = 4;
+    bool read = false;
+    if (f != NULL) {
+        read =  (fscanf(f, "%d", &gain) == 1);
+        if (gain < 1) {
+            ALOGW("Incorrect gain received %d resetting to 1", gain);
+            gain = 1;
+        } else if (gain > 16) {
+            ALOGW("Incorrect gain received %d resetting to 16", gain);
+            gain = 16;
+        } else if (read) {
+            ALOGD("Volume gain set to %d", gain);
+        }
+        fclose(f);
+    }
+    if (!read) {
+        ALOGW("Volume gain not set");
+    }
+    return gain;
+}
+
 static int adev_open_input_stream(struct audio_hw_device *device,
                                   audio_io_handle_t handle,
                                   audio_devices_t devices,
@@ -808,7 +831,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
         in->primary = NULL;
         in->dev = scr_dev;
         scr_dev->in_open = true;
-        in->volume_gain = 4; // fixed value for now
+        in->volume_gain = get_volume_gain();
 
         struct audio_stream *as = &scr_dev->recorded_stream->stream.common;
         in->sample_rate = as->get_sample_rate(as);
