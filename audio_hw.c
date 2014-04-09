@@ -822,6 +822,8 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     in->stream.read = in_read;
     in->stream.get_input_frames_lost = in_get_input_frames_lost;
 
+    in->dev = scr_dev;
+
     if (config->sample_rate >= 44100) {
         ALOGV("%s scr input stream", __func__);
         if (scr_dev->recorded_stream == NULL) {
@@ -829,7 +831,6 @@ static int adev_open_input_stream(struct audio_hw_device *device,
             return EINVAL;
         }
         in->primary = NULL;
-        in->dev = scr_dev;
         scr_dev->in_open = true;
         in->volume_gain = get_volume_gain();
 
