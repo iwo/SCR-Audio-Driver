@@ -640,8 +640,10 @@ static int adev_open_output_stream_common(struct scr_audio_device *scr_dev, stru
     ALOGV("Open output stream %d, sample_rate: %d", scr_dev->num_out_streams, sample_rate);
 
     out = (struct scr_stream_out *)calloc(1, sizeof(struct scr_stream_out));
-    if (!out)
+    if (!out) {
+        ALOGE("Error allocating output stream");
         return -ENOMEM;
+    }
 
     out->stream.common.get_sample_rate = out_get_sample_rate;
     out->stream.common.set_sample_rate = out_set_sample_rate;
@@ -690,18 +692,22 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     struct scr_stream_out *out = NULL;
 
     if (adev_open_output_stream_common(scr_dev, &out, config->sample_rate))
-            return -ENOMEM;
+        return -ENOMEM;
 
-    //TODO: handle errors in primary module
-    primary->open_output_stream(primary, handle, devices, flags, config, &out->primary);
+    int ret = primary->open_output_stream(primary, handle, devices, flags, config, &out->primary);
+    if (ret) {
+        ALOGE("Error opening output stream %d", ret);
+        free(out);
+        *stream_out = NULL;
+        return ret;
+    }
 
     if (out->primary->get_next_write_timestamp != NULL) {
         out->stream.get_next_write_timestamp = out_get_next_write_timestamp;
     }
 
     *stream_out = &out->stream;
-    ALOGV("%s stream out: %p", __func__, out);
-    ALOGV("%s primary stream: %p", __func__, out->primary);
+    ALOGV("stream out: %p primary: %p sample_rate: %d", out, out->primary, config->sample_rate);
     return 0;
 }
 #endif
@@ -718,12 +724,16 @@ static int adev_open_output_stream_v0(struct audio_hw_device_v0 *device,
     if (adev_open_output_stream_common(scr_dev, &out, *sample_rate))
         return -ENOMEM;
 
-    //TODO: handle errors in primary module
-    primary->open_output_stream(primary, devices, format, channels, sample_rate, &out->primary);
+    int ret = primary->open_output_stream(primary, devices, format, channels, sample_rate, &out->primary);
+    if (ret) {
+        ALOGE("Error opening output stream %d", ret);
+        free(out);
+        *stream_out = NULL;
+        return ret;
+    }
 
     *stream_out = &out->stream;
-    ALOGV("%s stream out: %p", __func__, out);
-    ALOGV("%s primary stream: %p", __func__, out->primary);
+    ALOGV("stream out: %p primary: %p sample_rate: %d", out, out->primary, *sample_rate);
     return 0;
 }
 
@@ -861,8 +871,10 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
     struct scr_stream_in *in;
 
     in = (struct scr_stream_in *)calloc(1, sizeof(struct scr_stream_in));
-    if (!in)
+    if (!in) {
+        ALOGE("Error allocating input stream");
         return -1;
+    }
 
     in->stream.common.get_sample_rate = in_get_sample_rate;
     in->stream.common.set_sample_rate = in_set_sample_rate;
@@ -886,7 +898,7 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
     *stream_in = in;
 
     if (*sample_rate >= 44100) {
-        ALOGV("%s scr input stream", __func__);
+        ALOGV("opening scr input stream");
         if (scr_dev->recorded_stream == NULL) {
             ALOGE("output stream not ready!");
             return EINVAL;
@@ -902,7 +914,7 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
         *sample_rate = in->sample_rate;
         return 1;
     } else {
-        ALOGV("%s standard input stream", __func__);
+        ALOGV("opening standard input stream");
         return 0;
     }
 }
@@ -924,10 +936,16 @@ static int adev_open_input_stream(struct audio_hw_device *device,
 
     if (status == 0) {
         ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
+        if (ret) {
+            ALOGE("Error opening input stream %d", ret);
+            free(in);
+            *stream_in = NULL;
+            return ret;
+        }
     }
 
     *stream_in = &in->stream;
-    ALOGV("%s returning stream %p", __func__, in);
+    ALOGV("returning input stream %p", in);
     return 0;
 }
 #endif
@@ -946,10 +964,16 @@ static int adev_open_input_stream_v0(struct audio_hw_device_v0 *device, uint32_t
 
     if (status == 0) {
         ret = primary->open_input_stream(primary, devices, format, channels, sample_rate, acoustics, &in->primary);
+        if (ret) {
+            ALOGE("Error opening input stream %d", ret);
+            free(in);
+            *stream_in = NULL;
+            return ret;
+        }
     }
 
     *stream_in = &in->stream;
-    ALOGV("%s returning stream %p", __func__, in);
+    ALOGV("returning input stream %p", in);
     return 0;
 }
 
@@ -1053,26 +1077,31 @@ static int adev_open(const hw_module_t* module, const char* name,
     struct scr_audio_device *scr_dev;
     int ret;
 
-    if (strcmp(name, AUDIO_HARDWARE_INTERFACE) != 0)
+    if (strcmp(name, AUDIO_HARDWARE_INTERFACE) != 0) {
+        ALOGE("Incorrect module name \"%s\"", name);
         return -EINVAL;
+    }
 
     scr_dev = calloc(1, sizeof(struct scr_audio_device));
-    if (!scr_dev)
+    if (!scr_dev) {
+        ALOGE("Can't allocate module memory");
         return -ENOMEM;
+    }
 
     const struct hw_module_t *primaryModule;
     ret = hw_get_module_by_class("audio", "original_primary", &primaryModule);
 
     if (ret) {
         ALOGE("error loading primary module. error: %d", ret);
-        return ret;
+        goto err_open;
     }
+    ALOGV("Using %s by %s", primaryModule->name ? primaryModule->name : "NULL", primaryModule->author ? primaryModule->author : "NULL");
 
     ret = primaryModule->methods->open(module, name, (struct hw_device_t **)&scr_dev->primary);
 
     if (ret) {
         ALOGE("can't open primary device. error:%d", ret);
-        return ret;
+        goto err_open;
     }
 
     struct hw_device_t *primary_common = &scr_dev->primary.current->common;
@@ -1155,9 +1184,12 @@ static int adev_open(const hw_module_t* module, const char* name,
     *device = &scr_dev->device.current.common;
 
     ALOGV("SCR device: %p", scr_dev);
-    ALOGV("Primary device: %p", scr_dev->primary.current);
-
     return 0;
+
+err_open:
+    free(scr_dev);
+    *device = NULL;
+    return ret;
 }
 
 static struct hw_module_methods_t hal_module_methods = {
