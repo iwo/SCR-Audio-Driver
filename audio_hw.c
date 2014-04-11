@@ -41,6 +41,7 @@ struct scr_audio_device {
         audio_hw_device_t current;
         audio_hw_device_v0_t v0;
     } device;
+    int padding[10];
     union {
         audio_hw_device_t *current;
         audio_hw_device_v0_t *v0;
@@ -64,6 +65,7 @@ struct scr_audio_device {
 
 struct scr_stream_out {
     struct audio_stream_out stream;
+    int padding[10];
     struct audio_stream_out *primary;
     struct scr_audio_device *dev;
     int stream_no;
@@ -72,6 +74,7 @@ struct scr_stream_out {
 
 struct scr_stream_in {
     struct audio_stream_in stream;
+    int padding[10];
     struct audio_stream_in *primary;
     struct scr_audio_device *dev;
     uint32_t sample_rate;
