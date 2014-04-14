@@ -1208,6 +1208,8 @@ static void set_current_dev_methods(struct audio_hw_device *dev, struct audio_hw
     #endif // SCR_SDK_VERSION >= 16
 }
 
+#if SCR_SDK_VERSION >= 16
+
 static void set_qcom_dev_methods(struct audio_hw_device_qcom *dev, struct audio_hw_device_qcom *primary)
 {
     dev->init_check = adev_init_check;
@@ -1229,6 +1231,8 @@ static void set_qcom_dev_methods(struct audio_hw_device_qcom *dev, struct audio_
     dev->open_input_stream = adev_open_input_stream;
     if (primary->get_master_volume != NULL) dev->get_master_volume = adev_get_master_volume;
 }
+
+#endif // SCR_SDK_VERSION >= 16
 
 static int adev_open(const hw_module_t* module, const char* name,
                      hw_device_t** device)
@@ -1270,11 +1274,13 @@ static int adev_open(const hw_module_t* module, const char* name,
     ALOGV("Device version 0x%.8X", primary_common->version);
 
     set_common_dev_members(&scr_dev->primary.current->common, (hw_module_t *) module);
-    if (!scr_dev->primary.current->set_mode) {
+    if (SCR_SDK_VERSION >= 16 && !scr_dev->primary.current->set_mode) {
         ALOGW("Modified API detected!");
         dump_primary_device(primary_common);
         scr_dev->qcom = true;
-        set_qcom_dev_methods(&scr_dev->device.qcom, scr_dev->primary.qcom);
+        #if SCR_SDK_VERSION >= 16
+            set_qcom_dev_methods(&scr_dev->device.qcom, scr_dev->primary.qcom);
+        #endif
     } else {
         set_current_dev_methods(&scr_dev->device.current, scr_dev->primary.current);
     }
