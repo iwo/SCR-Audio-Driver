@@ -34,14 +34,52 @@
 #define MIN_BUFFER_SIZE 440
 #define MAX_LOGS 10
 
+#if SCR_SDK_VERSION >= 16
+struct audio_hw_device_qcom {
+    struct hw_device_t common;
+    uint32_t (*get_supported_devices)(const struct audio_hw_device *dev);
+    int (*init_check)(const struct audio_hw_device *dev);
+    int (*set_voice_volume)(struct audio_hw_device *dev, float volume);
+    int (*set_master_volume)(struct audio_hw_device *dev, float volume);
+    int (*get_master_volume)(struct audio_hw_device *dev, float *volume);
+    int padding;
+    int (*set_mode)(struct audio_hw_device *dev, audio_mode_t mode);
+    int (*set_mic_mute)(struct audio_hw_device *dev, bool state);
+    int (*get_mic_mute)(const struct audio_hw_device *dev, bool *state);
+    int (*set_parameters)(struct audio_hw_device *dev, const char *kv_pairs);
+    char * (*get_parameters)(const struct audio_hw_device *dev, const char *keys);
+    size_t (*get_input_buffer_size)(const struct audio_hw_device *dev, const struct audio_config *config);
+    int (*open_output_stream)(struct audio_hw_device *dev, audio_io_handle_t handle, audio_devices_t devices,
+                              audio_output_flags_t flags, struct audio_config *config, struct audio_stream_out **stream_out);
+    void (*close_output_stream)(struct audio_hw_device *dev, struct audio_stream_out* stream_out);
+    int (*open_input_stream)(struct audio_hw_device *dev, audio_io_handle_t handle, audio_devices_t devices,
+                             struct audio_config *config, struct audio_stream_in **stream_in);
+    void (*close_input_stream)(struct audio_hw_device *dev, struct audio_stream_in *stream_in);
+    int (*dump)(const struct audio_hw_device *dev, int fd);
+};
+typedef struct audio_hw_device_qcom audio_hw_device_qcom_t;
+#endif
+
 struct scr_audio_device {
     union audio_hw_device_union {
         audio_hw_device_t current;
+        #if SCR_SDK_VERSION >= 16
+            audio_hw_device_qcom_t qcom;
+        #else
+            audio_hw_device_t qcom;
+        #endif
+
     } device;
     int padding[10];
     union {
         audio_hw_device_t *current;
+        #if SCR_SDK_VERSION >= 16
+            audio_hw_device_qcom_t *qcom;
+        #else
+            audio_hw_device_t *qcom;
+        #endif
     } primary;
+    bool qcom;
 
     // naive pipe implementation
     int16_t buffer[BUFFER_SIZE];
@@ -695,11 +733,16 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary.current;
     struct scr_stream_out *out = NULL;
+    int ret;
 
     if (adev_open_output_stream_common(scr_dev, &out, config->sample_rate))
         return -ENOMEM;
 
-    int ret = primary->open_output_stream(primary, handle, devices, flags, config, &out->primary);
+    if (scr_dev->qcom) {
+        ret = scr_dev->primary.qcom->open_output_stream(primary, handle, devices, flags, config, &out->primary);
+    } else {
+        ret = primary->open_output_stream(primary, handle, devices, flags, config, &out->primary);
+    }
     if (ret) {
         ALOGE("Error opening output stream %d", ret);
         free(out);
@@ -752,7 +795,11 @@ static void adev_close_output_stream(struct audio_hw_device *device,
     audio_hw_device_t *primary = scr_dev->primary.current;
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream_out *primary_stream = scr_stream == NULL ? NULL : scr_stream->primary;
-    primary->close_output_stream(primary, primary_stream);
+    if (scr_dev->qcom) {
+        scr_dev->primary.qcom->close_output_stream(primary, primary_stream);
+    } else {
+        primary->close_output_stream(primary, primary_stream);
+    }
     if (scr_dev->recorded_stream == scr_stream) {
         scr_dev->recorded_stream = NULL;
     }
@@ -763,6 +810,8 @@ static int adev_set_parameters(struct audio_hw_device *device, const char *kvpai
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary.current;
+    if (scr_dev->qcom)
+        return scr_dev->primary.qcom->set_parameters(primary, kvpairs);
     return primary->set_parameters(primary, kvpairs);
 }
 
@@ -771,6 +820,8 @@ static char * adev_get_parameters(const struct audio_hw_device *device,
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary.current;
+    if (scr_dev->qcom)
+            return scr_dev->primary.qcom->get_parameters(primary, keys);
     return primary->get_parameters(primary, keys);
 }
 
@@ -809,6 +860,8 @@ static int adev_set_mode(struct audio_hw_device *device, audio_mode_t mode)
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary.current;
+    if (scr_dev->qcom)
+        return scr_dev->primary.qcom->set_mode(primary, mode);
     return primary->set_mode(primary, mode);
 }
 
@@ -816,6 +869,8 @@ static int adev_set_mic_mute(struct audio_hw_device *device, bool state)
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary.current;
+    if (scr_dev->qcom)
+        return scr_dev->primary.qcom->set_mic_mute(primary, state);
     return primary->set_mic_mute(primary, state);
 }
 
@@ -823,6 +878,8 @@ static int adev_get_mic_mute(const struct audio_hw_device *device, bool *state)
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary.current;
+    if (scr_dev->qcom)
+        return scr_dev->primary.qcom->get_mic_mute(primary, state);
     return primary->get_mic_mute(primary, state);
 }
 
@@ -831,7 +888,6 @@ static size_t adev_get_input_buffer_size(const struct audio_hw_device *device,
                                          const struct audio_config *config)
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
-    audio_hw_device_t *primary = scr_dev->primary.current;
     struct scr_stream_out *recorded_stream = scr_dev->recorded_stream;
     // return something big to avoid buffer overruns
     // the actual size will be returned from in_get_buffer_size
@@ -849,8 +905,14 @@ static size_t adev_get_input_buffer_size_v0(const struct audio_hw_device *device
                                          int channel_count)
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
-    audio_hw_device_t *primary = scr_dev->primary.current;
-    return primary->get_input_buffer_size(primary, sample_rate, format, channel_count);
+    struct scr_stream_out *recorded_stream = scr_dev->recorded_stream;
+    // return something big to avoid buffer overruns
+    // the actual size will be returned from in_get_buffer_size
+    if (recorded_stream != NULL) {
+        struct audio_stream* stream = &recorded_stream->stream.common;
+        return 4 * stream->get_buffer_size(stream);
+    }
+    return 8 * 2048;
 }
 
 #endif // SCR_SDK_VERSION >= 16
@@ -946,7 +1008,11 @@ static int adev_open_input_stream(struct audio_hw_device *device,
         return -ENOMEM;
 
     if (status == 0) {
-        ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
+        if (scr_dev->qcom) {
+            ret = scr_dev->primary.qcom->open_input_stream(primary, handle, devices, config, &in->primary);
+        } else {
+            ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
+        }
         if (ret) {
             ALOGE("Error opening input stream %d", ret);
             free(in);
@@ -998,7 +1064,11 @@ static void adev_close_input_stream(struct audio_hw_device *device,
     audio_hw_device_t *primary_dev = scr_dev->primary.current;
     struct audio_stream_in *primary_stream = scr_stream == NULL ? NULL : scr_stream->primary;
     if (primary_stream != NULL) {
-        primary_dev->close_input_stream(primary_dev, primary_stream);
+        if (scr_dev->qcom) {
+            scr_dev->primary.qcom->close_input_stream(primary_dev, primary_stream);
+        } else {
+            primary_dev->close_input_stream(primary_dev, primary_stream);
+        }
     } else {
         pthread_mutex_lock(&scr_dev->lock);
         scr_dev->in_open = false;
@@ -1064,6 +1134,8 @@ static int adev_dump(const audio_hw_device_t *device, int fd)
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     const audio_hw_device_t *primary = scr_dev->primary.current;
+    if (scr_dev->qcom)
+        return scr_dev->primary.qcom->dump(primary, fd);
     return primary->dump(primary, fd);
 }
 
@@ -1081,6 +1153,81 @@ static uint32_t adev_get_supported_devices(const struct audio_hw_device *device)
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     const audio_hw_device_t *primary = scr_dev->primary.current;
     return primary->get_supported_devices(primary);
+}
+
+static void dump_primary_device(hw_device_t *primary_common)
+{
+    int *device_data = (int *) primary_common;
+    int device_size = sizeof(struct audio_hw_device);
+    int i = 0;
+    for (i = 0; i < (device_size / 4 - 3); i += 4) {
+        ALOGV("%d %.8X %.8X %.8X %.8X", i, device_data[i], device_data[i+1], device_data[i+2], device_data[i+3]);
+    }
+}
+
+static void set_common_dev_members(struct hw_device_t *common, hw_module_t *module)
+{
+    common->tag = HARDWARE_DEVICE_TAG;
+    common->module = module;
+    common->close = adev_close;
+    #if SCR_SDK_VERSION >= 17
+        common->version = AUDIO_DEVICE_API_VERSION_2_0;
+    #elif SCR_SDK_VERSION >= 16
+        common->version = AUDIO_DEVICE_API_VERSION_1_0;
+    #else
+        common->version = 0;
+    #endif
+}
+
+static void set_current_dev_methods(struct audio_hw_device *dev, struct audio_hw_device *primary)
+{
+    dev->init_check = adev_init_check;
+    dev->set_voice_volume = adev_set_voice_volume;
+    dev->set_mode = adev_set_mode;
+    dev->set_parameters = adev_set_parameters;
+    dev->get_parameters = adev_get_parameters;
+    dev->close_output_stream = adev_close_output_stream;
+    dev->close_input_stream = adev_close_input_stream;
+    dev->dump = adev_dump;
+
+    if (primary->get_supported_devices != NULL) dev->get_supported_devices = adev_get_supported_devices;
+    if (primary->set_mic_mute != NULL) dev->set_mic_mute = adev_set_mic_mute;
+    if (primary->get_mic_mute != NULL) dev->get_mic_mute = adev_get_mic_mute;
+    if (primary->set_master_volume != NULL) dev->set_master_volume = adev_set_master_volume;
+
+    #if SCR_SDK_VERSION >= 16
+
+        dev->get_input_buffer_size = adev_get_input_buffer_size;
+        dev->open_output_stream = adev_open_output_stream;
+        dev->open_input_stream = adev_open_input_stream;
+        if (primary->get_master_volume != NULL) dev->get_master_volume = adev_get_master_volume;
+    #else
+        dev->get_input_buffer_size = adev_get_input_buffer_size_v0;
+        dev->open_output_stream = adev_open_output_stream_v0;
+        dev->open_input_stream = adev_open_input_stream_v0;
+    #endif // SCR_SDK_VERSION >= 16
+}
+
+static void set_qcom_dev_methods(struct audio_hw_device_qcom *dev, struct audio_hw_device_qcom *primary)
+{
+    dev->init_check = adev_init_check;
+    dev->set_voice_volume = adev_set_voice_volume;
+    dev->set_mode = adev_set_mode;
+    dev->set_parameters = adev_set_parameters;
+    dev->get_parameters = adev_get_parameters;
+    dev->close_output_stream = adev_close_output_stream;
+    dev->close_input_stream = adev_close_input_stream;
+    dev->dump = adev_dump;
+
+    if (primary->get_supported_devices != NULL) dev->get_supported_devices = adev_get_supported_devices;
+    if (primary->set_mic_mute != NULL) dev->set_mic_mute = adev_set_mic_mute;
+    if (primary->get_mic_mute != NULL) dev->get_mic_mute = adev_get_mic_mute;
+    if (primary->set_master_volume != NULL) dev->set_master_volume = adev_set_master_volume;
+
+    dev->get_input_buffer_size = adev_get_input_buffer_size;
+    dev->open_output_stream = adev_open_output_stream;
+    dev->open_input_stream = adev_open_input_stream;
+    if (primary->get_master_volume != NULL) dev->get_master_volume = adev_get_master_volume;
 }
 
 static int adev_open(const hw_module_t* module, const char* name,
@@ -1117,47 +1264,20 @@ static int adev_open(const hw_module_t* module, const char* name,
         goto err_open;
     }
 
-    struct hw_device_t *primary_common = &scr_dev->primary.current->common;
+    hw_device_t *primary_common = &scr_dev->primary.current->common;
 
     ALOGV("Primary device %p", primary_common);
     ALOGV("Device version 0x%.8X", primary_common->version);
 
-    struct audio_hw_device *dev = &scr_dev->device.current;
-    struct audio_hw_device *primary = scr_dev->primary.current;
-
-    dev->common.tag = HARDWARE_DEVICE_TAG;
-    dev->common.module = (struct hw_module_t *) module;
-    dev->common.close = adev_close;
-    dev->init_check = adev_init_check;
-    dev->set_voice_volume = adev_set_voice_volume;
-    dev->set_mode = adev_set_mode;
-    dev->set_parameters = adev_set_parameters;
-    dev->get_parameters = adev_get_parameters;
-    dev->close_output_stream = adev_close_output_stream;
-    dev->close_input_stream = adev_close_input_stream;
-    dev->dump = adev_dump;
-
-    if (primary->get_supported_devices != NULL) dev->get_supported_devices = adev_get_supported_devices;
-    if (primary->set_mic_mute != NULL) dev->set_mic_mute = adev_set_mic_mute;
-    if (primary->get_mic_mute != NULL) dev->get_mic_mute = adev_get_mic_mute;
-    if (primary->set_master_volume != NULL) dev->set_master_volume = adev_set_master_volume;
-
-    #if SCR_SDK_VERSION >= 16
-        #if SCR_SDK_VERSION >= 17
-            dev->common.version = AUDIO_DEVICE_API_VERSION_2_0;
-        #else
-            dev->common.version = AUDIO_DEVICE_API_VERSION_1_0;
-        #endif
-        dev->get_input_buffer_size = adev_get_input_buffer_size;
-        dev->open_output_stream = adev_open_output_stream;
-        dev->open_input_stream = adev_open_input_stream;
-        if (primary->get_master_volume != NULL) dev->get_master_volume = adev_get_master_volume;
-    #else
-        dev->common.version = 0;
-        dev->get_input_buffer_size = adev_get_input_buffer_size_v0;
-        dev->open_output_stream = adev_open_output_stream_v0;
-        dev->open_input_stream = adev_open_input_stream_v0;
-    #endif // SCR_SDK_VERSION >= 16
+    set_common_dev_members(&scr_dev->primary.current->common, (hw_module_t *) module);
+    if (!scr_dev->primary.current->set_mode) {
+        ALOGW("Modified API detected!");
+        dump_primary_device(primary_common);
+        scr_dev->qcom = true;
+        set_qcom_dev_methods(&scr_dev->device.qcom, scr_dev->primary.qcom);
+    } else {
+        set_current_dev_methods(&scr_dev->device.current, scr_dev->primary.current);
+    }
 
     scr_dev->recorded_stream = NULL;
     scr_dev->num_out_streams = 0;
