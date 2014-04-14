@@ -312,6 +312,15 @@ static int in_set_sample_rate(struct audio_stream *stream, uint32_t rate)
     return 0;
 }
 
+static inline size_t stream_frame_size(const struct audio_stream *s)
+{
+    #if SCR_SDK_VERSION < 17
+    return audio_stream_frame_size((struct audio_stream *) s); // cast to remove warning
+    #else
+    return audio_stream_frame_size(s);
+    #endif
+}
+
 static size_t in_get_buffer_size(const struct audio_stream *stream)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
@@ -324,7 +333,7 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
         return 2048;
     }
     struct audio_stream *out_stream = &scr_stream_out->stream.common;
-    size_t out_size = out_stream->get_buffer_size(out_stream) / audio_stream_frame_size(out_stream);
+    size_t out_size = out_stream->get_buffer_size(out_stream) / stream_frame_size(out_stream);
     size_t in_size = out_size;
     while (in_size < MIN_BUFFER_SIZE) {
         in_size += out_size;
@@ -332,7 +341,7 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
     if (scr_stream->dev->verbose_logging) {
         ALOGD("Setting buffer size to %d frames (output  %d)", in_size, out_size);
     }
-    return in_size * audio_stream_frame_size(stream);
+    return in_size * stream_frame_size(stream);
 }
 
 static uint32_t in_get_channels(const struct audio_stream *stream)
@@ -431,7 +440,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
 
     pthread_mutex_lock(&device->lock);
 
-    int frame_size = audio_stream_frame_size(&stream->common);
+    int frame_size = stream_frame_size(&stream->common);
     int frames_to_read = bytes / frame_size;
     int out_channels = scr_stream->out_channels;
     int sample_rate = scr_stream->sample_rate;
@@ -912,7 +921,7 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
         struct audio_stream *as = &scr_dev->recorded_stream->stream.common;
         in->sample_rate = as->get_sample_rate(as);
         in->out_channels = popcount(as->get_channels(as));
-        in->stats_out_buffer_size = as->get_buffer_size(as) / audio_stream_frame_size(as);
+        in->stats_out_buffer_size = as->get_buffer_size(as) / stream_frame_size(as);
         *sample_rate = in->sample_rate;
         return 1;
     } else {
@@ -1124,9 +1133,6 @@ static int adev_open(const hw_module_t* module, const char* name,
     dev->set_mode = adev_set_mode;
     dev->set_parameters = adev_set_parameters;
     dev->get_parameters = adev_get_parameters;
-    dev->get_input_buffer_size = adev_get_input_buffer_size;
-    dev->open_output_stream = adev_open_output_stream;
-    dev->open_input_stream = adev_open_input_stream;
     dev->close_output_stream = adev_close_output_stream;
     dev->close_input_stream = adev_close_input_stream;
     dev->dump = adev_dump;
