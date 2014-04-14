@@ -1273,7 +1273,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     ALOGV("Primary device %p", primary_common);
     ALOGV("Device version 0x%.8X", primary_common->version);
 
-    set_common_dev_members(&scr_dev->primary.current->common, (hw_module_t *) module);
+    set_common_dev_members(&scr_dev->device.current.common, (hw_module_t *) module);
     if (SCR_SDK_VERSION >= 16 && !scr_dev->primary.current->set_mode) {
         ALOGW("Modified API detected!");
         dump_primary_device(primary_common);
