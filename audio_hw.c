@@ -1206,8 +1206,6 @@ static void set_current_dev_methods(struct audio_hw_device *dev, struct audio_hw
     dev->set_mode = adev_set_mode;
     dev->set_parameters = adev_set_parameters;
     dev->get_parameters = adev_get_parameters;
-    dev->close_output_stream = (void *) adev_detect_qcom_open_output_stream; // replace by adev_close_output_stream
-    dev->close_input_stream = (void *) adev_detect_qcom_open_input_stream; // replace by adev_close_input_stream
     dev->dump = adev_dump;
 
     if (primary->get_supported_devices != NULL) dev->get_supported_devices = adev_get_supported_devices;
@@ -1216,12 +1214,15 @@ static void set_current_dev_methods(struct audio_hw_device *dev, struct audio_hw
     if (primary->set_master_volume != NULL) dev->set_master_volume = adev_set_master_volume;
 
     #if SCR_SDK_VERSION >= 16
-
+        dev->close_output_stream = (void *) adev_detect_qcom_open_output_stream; // replace by adev_close_output_stream
+        dev->close_input_stream = (void *) adev_detect_qcom_open_input_stream; // replace by adev_close_input_stream
         dev->get_input_buffer_size = adev_get_input_buffer_size;
         dev->open_output_stream = adev_open_output_stream;
         dev->open_input_stream = adev_open_input_stream;
         if (primary->get_master_volume != NULL) dev->get_master_volume = adev_get_master_volume;
     #else
+        dev->close_output_stream = adev_close_output_stream;
+        dev->close_input_stream = adev_close_input_stream;
         dev->get_input_buffer_size = adev_get_input_buffer_size_v0;
         dev->open_output_stream = adev_open_output_stream_v0;
         dev->open_input_stream = adev_open_input_stream_v0;
