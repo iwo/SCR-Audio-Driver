@@ -58,6 +58,10 @@ struct audio_hw_device_qcom {
     int (*dump)(const struct audio_hw_device *dev, int fd);
 };
 typedef struct audio_hw_device_qcom audio_hw_device_qcom_t;
+
+static void convert_to_qcom(struct audio_hw_device *device);
+static void disable_qcom_detection(struct audio_hw_device *device);
+
 #endif
 
 struct scr_audio_device {
@@ -735,6 +739,8 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     struct scr_stream_out *out = NULL;
     int ret;
 
+    disable_qcom_detection(device);
+
     if (adev_open_output_stream_common(scr_dev, &out, config->sample_rate))
         return -ENOMEM;
 
@@ -757,6 +763,17 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     *stream_out = &out->stream;
     ALOGV("stream out: %p primary: %p sample_rate: %d", out, out->primary, config->sample_rate);
     return 0;
+}
+
+static int adev_detect_qcom_open_output_stream(struct audio_hw_device *device,
+                                   audio_io_handle_t handle,
+                                   audio_devices_t devices,
+                                   audio_output_flags_t flags,
+                                   struct audio_config *config,
+                                   struct audio_stream_out **stream_out)
+{
+    convert_to_qcom(device);
+    return adev_open_output_stream(device, handle, devices, flags, config, stream_out);
 }
 
 #else
@@ -1003,6 +1020,9 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     audio_hw_device_t *primary = scr_dev->primary.current;
     struct scr_stream_in *in;
     int ret = 0;
+
+    disable_qcom_detection(device);
+
     int status = open_input_stream_common(scr_dev, &config->sample_rate, &in);
     if (status < 0)
         return -ENOMEM;
@@ -1024,6 +1044,16 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     *stream_in = &in->stream;
     ALOGV("returning input stream %p", in);
     return 0;
+}
+
+static int adev_detect_qcom_open_input_stream(struct audio_hw_device *device,
+                                  audio_io_handle_t handle,
+                                  audio_devices_t devices,
+                                  struct audio_config *config,
+                                  struct audio_stream_in **stream_in)
+{
+    convert_to_qcom(device);
+    return adev_open_input_stream(device, handle, devices, config, stream_in);
 }
 
 #else
@@ -1155,16 +1185,6 @@ static uint32_t adev_get_supported_devices(const struct audio_hw_device *device)
     return primary->get_supported_devices(primary);
 }
 
-static void dump_primary_device(hw_device_t *primary_common)
-{
-    int *device_data = (int *) primary_common;
-    int device_size = sizeof(struct audio_hw_device);
-    int i = 0;
-    for (i = 0; i < (device_size / 4 - 3); i += 4) {
-        ALOGV("%d %.8X %.8X %.8X %.8X", i, device_data[i], device_data[i+1], device_data[i+2], device_data[i+3]);
-    }
-}
-
 static void set_common_dev_members(struct hw_device_t *common, hw_module_t *module)
 {
     common->tag = HARDWARE_DEVICE_TAG;
@@ -1186,8 +1206,8 @@ static void set_current_dev_methods(struct audio_hw_device *dev, struct audio_hw
     dev->set_mode = adev_set_mode;
     dev->set_parameters = adev_set_parameters;
     dev->get_parameters = adev_get_parameters;
-    dev->close_output_stream = adev_close_output_stream;
-    dev->close_input_stream = adev_close_input_stream;
+    dev->close_output_stream = (void *) adev_detect_qcom_open_output_stream; // replace by adev_close_output_stream
+    dev->close_input_stream = (void *) adev_detect_qcom_open_input_stream; // replace by adev_close_input_stream
     dev->dump = adev_dump;
 
     if (primary->get_supported_devices != NULL) dev->get_supported_devices = adev_get_supported_devices;
@@ -1232,6 +1252,24 @@ static void set_qcom_dev_methods(struct audio_hw_device_qcom *dev, struct audio_
     if (primary->get_master_volume != NULL) dev->get_master_volume = adev_get_master_volume;
 }
 
+
+static void convert_to_qcom(struct audio_hw_device *device) {
+    struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
+
+    ALOGW("Switching to modified API!");
+
+    scr_dev->qcom = true;
+    set_qcom_dev_methods(&scr_dev->device.qcom, scr_dev->primary.qcom);
+}
+
+static void disable_qcom_detection(struct audio_hw_device *device) {
+    struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
+    if (!scr_dev->qcom) {
+        scr_dev->device.current.close_output_stream = adev_close_output_stream;
+        scr_dev->device.current.close_input_stream = adev_close_input_stream;
+    }
+}
+
 #endif // SCR_SDK_VERSION >= 16
 
 static int adev_open(const hw_module_t* module, const char* name,
@@ -1274,16 +1312,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     ALOGV("Device version 0x%.8X", primary_common->version);
 
     set_common_dev_members(&scr_dev->device.current.common, (hw_module_t *) module);
-    if (SCR_SDK_VERSION >= 16 && !scr_dev->primary.current->set_mode) {
-        ALOGW("Modified API detected!");
-        dump_primary_device(primary_common);
-        scr_dev->qcom = true;
-        #if SCR_SDK_VERSION >= 16
-            set_qcom_dev_methods(&scr_dev->device.qcom, scr_dev->primary.qcom);
-        #endif
-    } else {
-        set_current_dev_methods(&scr_dev->device.current, scr_dev->primary.current);
-    }
+    set_current_dev_methods(&scr_dev->device.current, scr_dev->primary.current);
 
     scr_dev->recorded_stream = NULL;
     scr_dev->num_out_streams = 0;
