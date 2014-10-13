@@ -218,6 +218,9 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 {
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
+    if (scr_stream->dev->verbose_logging) {
+        ALOGV("%s %p %s", __func__, stream, kvpairs);
+    }
     return primary->set_parameters(primary, kvpairs);
 }
 
@@ -240,6 +243,9 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
 {
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream_out *primary = scr_stream->primary;
+    if (scr_stream->dev->verbose_logging) {
+        ALOGV("%s %p %f %f", __func__, stream, left, right);
+    }
     return primary->set_volume(primary, left, right);
 }
 
@@ -410,8 +416,12 @@ static int in_set_format(struct audio_stream *stream, audio_format_t format)
     struct audio_stream *primary = &scr_stream->primary->common;
     if (primary)
         return primary->set_format(primary, format);
-    if (format != AUDIO_FORMAT_PCM_16_BIT)
+    if (format != AUDIO_FORMAT_PCM_16_BIT) {
+        if (scr_stream->dev->verbose_logging) {
+            ALOGW("%s %p %d", __func__, stream, format);
+        }
         return -EINVAL;
+    }
     return 0;
 }
 
