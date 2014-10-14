@@ -25,11 +25,11 @@
 
 #include <dlfcn.h>
 
-#define BUFFER_SIZE (16 * 1024)
+#define BUFFER_SIZE (128 * 1024)
 #define MAX_WAIT_READ_RETRY 20
 #define READ_RETRY_WAIT 5000
-// maximum number of buffers which may be passed simultaneously on out wakeup
-#define MAX_OUT_WAKE_UP_BUFFERS 3
+// maximum number of buffers which may be passed one by one (with 1ms sleeps) on out wakeup
+#define MAX_CONSECUTIVE_BUFFERS 3
 // buffer size should be above 10ms to avoid scheduling related issues
 #define MIN_BUFFER_SIZE 440
 #define MAX_LOGS 10
@@ -86,13 +86,22 @@ struct scr_audio_device {
     bool qcom;
 
     // naive pipe implementation
-    int16_t buffer[BUFFER_SIZE];
     int buffer_start;
     int buffer_end;
+    union {
+        int16_t* int16;
+        int32_t* int32;
+        int8_t* int8;
+
+    } buffer;
 
     bool out_active;
     bool in_active;
     bool in_open;
+
+    int out_channels;
+    audio_format_t out_format;
+    int out_frame_size;
 
     bool verbose_logging;
 
@@ -120,7 +129,6 @@ struct scr_stream_in {
     int64_t in_start_us;
     int64_t frames_read;
     bool recording_silence;
-    int out_channels;
     int stats_data;
     int stats_silence;
     int stats_in_buffer_size;
@@ -142,8 +150,10 @@ static inline int64_t get_time_us() {
     return (int64_t) now.tv_sec * 1000000ll + now.tv_nsec / 1000ll;
 }
 
-static int get_available_frames(struct scr_audio_device *device, int channels) {
-    return ((device->buffer_end + BUFFER_SIZE - device->buffer_start) % BUFFER_SIZE) / channels;
+static int get_available_frames(struct scr_audio_device *device) {
+    if (device->out_frame_size == 0)
+        return 0;
+    return ((device->buffer_end + BUFFER_SIZE - device->buffer_start) % BUFFER_SIZE) / device->out_frame_size;
 }
 
 static uint32_t out_get_sample_rate(const struct audio_stream *stream)
@@ -249,6 +259,30 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     return primary->set_volume(primary, left, right);
 }
 
+static void buffer_write(struct scr_audio_device *dev, const void *src, size_t bytes) {
+    size_t free_space = BUFFER_SIZE - dev->buffer_end + dev->buffer_start;
+    if (bytes > free_space) {
+        if (dev->in_active) {
+            ALOGE("SCR driver buffer overrun!");
+            dev->recorded_stream->stats_overflows++;
+        }
+        if (bytes > BUFFER_SIZE) { // very unlikely
+            ALOGE("output buffer too big %d", bytes);
+            bytes = BUFFER_SIZE;
+        }
+        dev->buffer_start = (dev->buffer_end + bytes + 1) % BUFFER_SIZE;
+    }
+    int buffer_end = (dev->buffer_end + bytes) % BUFFER_SIZE;
+    if (buffer_end > dev->buffer_end) {
+        memcpy(&dev->buffer.int8[dev->buffer_end], src, bytes);
+    } else {
+        size_t first_part_size = BUFFER_SIZE - dev->buffer_end;
+        memcpy(&dev->buffer.int8[dev->buffer_end], src, first_part_size);
+        memcpy(&dev->buffer.int8[0], (int8_t *) src + first_part_size, buffer_end);
+    }
+    dev->buffer_end = buffer_end;
+}
+
 static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                          size_t bytes)
 {
@@ -275,33 +309,10 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
 
     pthread_mutex_lock(&device->lock);
     if (result > 0 && device->recorded_stream == scr_stream && device->in_open) {
-
-        int free_space = BUFFER_SIZE - device->buffer_end + device->buffer_start;
-        int sample_size = sizeof(int16_t);
-        int sample_count = result / sample_size;
-        if (sample_count > free_space) {
-            if (device->in_active) {
-                ALOGE("SCR driver buffer overrun!");
-                scr_stream->stats_overflows++;
-            }
-            if (sample_count > BUFFER_SIZE) { // very unlikely
-                ALOGE("output buffer too big %d", sample_count);
-                sample_count = BUFFER_SIZE;
-                result = BUFFER_SIZE * sample_size;
-            }
-            device->buffer_start = (device->buffer_start + sample_count) % BUFFER_SIZE; // skip one oldest buffer
-        }
-        int buffer_end = (device->buffer_end + sample_count) % BUFFER_SIZE;
-        if (buffer_end > device->buffer_end) {
-            memcpy(&device->buffer[device->buffer_end], buffer, result);
-        } else {
-            size_t first_part_size = sample_size * (BUFFER_SIZE - device->buffer_end);
-            memcpy(&device->buffer[device->buffer_end], buffer, first_part_size);
-            memcpy(&device->buffer[0], (int8_t*) buffer + first_part_size, sample_size * buffer_end);
-        }
-        device->buffer_end = buffer_end;
+        buffer_write(device, buffer, result);
     }
     pthread_mutex_unlock(&device->lock);
+
     return result;
 }
 
@@ -476,54 +487,33 @@ static int in_set_gain(struct audio_stream_in *stream, float gain)
     return 0;
 }
 
-static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
-                       size_t bytes)
-{
-    struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
-    struct audio_stream_in *primary = scr_stream->primary;
-    struct scr_audio_device *device = scr_stream->dev;
-    if (device->verbose_logging) {
-        ALOGV("in_read %d bytes", bytes);
+static void skip_excess_frames(struct scr_audio_device *device, int frames_to_read) {
+    int target_frames_count = (frames_to_read + frames_to_read / 2);
+    int available_frames = get_available_frames(device);
+    if (available_frames > target_frames_count) {
+        device->buffer_start = (device->buffer_start + (available_frames - target_frames_count) * device->out_frame_size) % BUFFER_SIZE;
     }
-    if (primary)
-        return primary->read(primary, buffer, bytes);
+}
 
-    int64_t start_time = get_time_us();
+static void activate_input(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int frames_to_read, int64_t duration) {
+    ALOGD("Input active");
+    // in_active is set after initial sleep to avoid overflows at startup
+    scr_stream->in_start_us = get_time_us();
+    scr_stream->frames_read = 0L;
+    scr_stream->stats_in_buffer_size = frames_to_read;
 
+    pthread_mutex_unlock(&device->lock);
+    if (device->verbose_logging) {
+        ALOGV("sleep %lld ms", duration);
+    }
+    usleep(duration);
     pthread_mutex_lock(&device->lock);
 
-    int frame_size = stream_frame_size(&stream->common);
-    int frames_to_read = bytes / frame_size;
-    int out_channels = scr_stream->out_channels;
-    int sample_rate = scr_stream->sample_rate;
-    int available_frames = get_available_frames(device, out_channels);
-    int64_t duration = frames_to_read * 1000000ll / sample_rate; //TODO: use standard time functions and types
+    device->in_active = true;
+    skip_excess_frames(device, frames_to_read);
+}
 
-    if (!device->in_active) {
-        ALOGD("Input active");
-        // in_active is set after initial sleep to avoid overflows at startup
-        scr_stream->in_start_us = get_time_us();
-        scr_stream->frames_read = 0L;
-        scr_stream->stats_in_buffer_size = frames_to_read;
-
-        pthread_mutex_unlock(&device->lock);
-        if (device->verbose_logging) {
-            ALOGV("sleep %lld ms", duration);
-        }
-        usleep(duration);
-        pthread_mutex_lock(&device->lock);
-        device->in_active = true;
-        available_frames = get_available_frames(device, out_channels);
-
-        int initial_frames = (frames_to_read + frames_to_read / 2);
-        if (available_frames > initial_frames) {
-            //skip excess frames
-            device->buffer_start = (device->buffer_start + (available_frames - initial_frames) * out_channels) % BUFFER_SIZE;
-            available_frames = get_available_frames(device, out_channels);
-        }
-    }
-
-    int64_t ret_time = scr_stream->in_start_us + (scr_stream->frames_read + frames_to_read) * 1000000ll / sample_rate;
+static void wait_for_ret_time(struct scr_audio_device *device, int64_t ret_time) {
     int64_t now = get_time_us();
 
     pthread_mutex_unlock(&device->lock);
@@ -536,63 +526,57 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
         usleep(1000); // give 1ms time for consumer to catch up
     }
     pthread_mutex_lock(&device->lock);
+}
 
-    available_frames = get_available_frames(device, out_channels);
-
-    if (available_frames > 4 * frames_to_read) {
-        if (device->verbose_logging || scr_stream->stats_excess < MAX_LOGS) {
-            ALOGW("available excess frames %d. This may cause buffer overrun in RecordThread", available_frames);
-        }
-        scr_stream->stats_excess++;
-    }
-
-    if (available_frames < frames_to_read) {
-        if (device->out_active) {
-            //TODO: replace loops below with single consistent loop
-            if (scr_stream->recording_silence) {
-                // output just started, allow some time for output streem initialization
-                // later the output stream may catch up by accepting couple buffers one by one
-                int buffers_waited = 0;
-                while (device->out_active && ++buffers_waited < MAX_OUT_WAKE_UP_BUFFERS && available_frames < frames_to_read) {
-                    pthread_mutex_unlock(&device->lock);
-                    if (device->verbose_logging) {
-                        ALOGD("out wakeup wait %lld ms", buffers_waited * duration / 1000ll);
-                    }
-                    usleep(duration);
-                    pthread_mutex_lock(&device->lock);
-                    available_frames = get_available_frames(device, out_channels);
-                }
-            } else {
-                int attempts = 0;
-                while (device->out_active && attempts < MAX_WAIT_READ_RETRY && available_frames < frames_to_read) {
-                    pthread_mutex_unlock(&device->lock);
-                    attempts++;
-                    usleep(READ_RETRY_WAIT);
-                    pthread_mutex_lock(&device->lock);
-                    available_frames = get_available_frames(device, out_channels);
-                }
-                int latency = (attempts * READ_RETRY_WAIT / 1000ll);
-                if (device->verbose_logging || scr_stream->stats_late_buffers < MAX_LOGS) {
-                    ALOGW("waited extra %d ms", latency);
-                }
-                if (scr_stream->stats_latency_max < latency) {
-                    scr_stream->stats_latency_max = latency;
-                }
-                scr_stream->stats_latency += latency;
-                scr_stream->stats_late_buffers++;
-                if (attempts == MAX_WAIT_READ_RETRY && available_frames < frames_to_read) {
-                    scr_stream->stats_delays++;
-                    if (device->verbose_logging || scr_stream->stats_delays < MAX_LOGS) {
-                        ALOGE("output data not received on time. available %d", available_frames);
-                    }
-                    // will record remaining frames and start recording silence
-                }
+static void wait_for_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int frames_to_read, int64_t duration) {
+    int available_frames = get_available_frames(device);
+    //TODO: replace loops below with single consistent loop
+    if (scr_stream->recording_silence) {
+        // output just started, allow some time for output streem initialization
+        // later the output stream may catch up by accepting couple buffers one by one
+        int buffers_waited = 0;
+        while (device->out_active && ++buffers_waited < MAX_CONSECUTIVE_BUFFERS && available_frames < frames_to_read) {
+            pthread_mutex_unlock(&device->lock);
+            if (device->verbose_logging) {
+                ALOGD("out wakeup wait %lld ms", buffers_waited * duration / 1000ll);
             }
+            usleep(duration);
+            pthread_mutex_lock(&device->lock);
+            available_frames = get_available_frames(device);
+        }
+    } else {
+        int attempts = 0;
+        while (device->out_active && attempts < MAX_WAIT_READ_RETRY && available_frames < frames_to_read) {
+            pthread_mutex_unlock(&device->lock);
+            attempts++;
+            usleep(READ_RETRY_WAIT);
+            pthread_mutex_lock(&device->lock);
+            available_frames = get_available_frames(device);
+        }
+
+        int latency = (attempts * READ_RETRY_WAIT / 1000ll);
+        if (device->verbose_logging || scr_stream->stats_late_buffers < MAX_LOGS) {
+            ALOGW("waited extra %d ms", latency);
+        }
+        if (scr_stream->stats_latency_max < latency) {
+            scr_stream->stats_latency_max = latency;
+        }
+        scr_stream->stats_latency += latency;
+        scr_stream->stats_late_buffers++;
+        if (attempts == MAX_WAIT_READ_RETRY && available_frames < frames_to_read) {
+            scr_stream->stats_delays++;
+            if (device->verbose_logging || scr_stream->stats_delays < MAX_LOGS) {
+                ALOGE("output data not received on time. available %d", available_frames);
+            }
+            // will record remaining frames and start recording silence
         }
     }
+}
 
+static bool should_extend_silence(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int sample_rate, int frames_to_read, int available_frames, int64_t ret_time) {
     if (scr_stream->recording_silence && device->out_active) {
-        now = get_time_us();
+        int64_t now = get_time_us();
+        int64_t duration = frames_to_read * 1000000ll / sample_rate;
         int frames_to_catch_up = ((now - ret_time) * (int64_t) sample_rate) / 1000000ll + frames_to_read; //TODO: make sure that we need this one buffer padding
 
         if (available_frames < frames_to_catch_up) {
@@ -600,23 +584,94 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
                 ALOGD("not enough frames available %d should be %d, writing silence", available_frames, frames_to_catch_up);
             }
             scr_stream->stats_start_latency_tmp += (int64_t) duration / 1000ll;
-            available_frames = 0;
+            return true;
         }
     }
+    return false;
+}
 
-    bool latency_reported = false;
+static void log_start_stats(struct scr_stream_in *scr_stream, int64_t ret_time) {
+    scr_stream->stats_starts++;
+    int64_t now = get_time_us();
+    int latency = (int64_t)(now - ret_time) / 1000ll + scr_stream->stats_start_latency_tmp;
+    if (scr_stream->stats_start_latency_max < latency) {
+        scr_stream->stats_start_latency_max = latency;
+    }
+    scr_stream->stats_start_latency += latency;
+    scr_stream->stats_start_latency_tmp = 0;
+}
+
+static int copy_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int16_t *dst, int frames_to_read, int available_frames) {
+    //TODO: handle stereo recording
+    int frames_read = 0;
+    for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
+        int sample = 0;
+        if (device->out_channels == 1) {
+            sample = device->buffer.int16[device->buffer_start / 2] * scr_stream->volume_gain;
+            device->buffer_start = (device->buffer_start + 2) % BUFFER_SIZE;
+        } else { // out_channels == 2
+            sample = (device->buffer.int16[device->buffer_start / 2] + device->buffer.int16[(device->buffer_start / 2 + 1) % BUFFER_SIZE]) * scr_stream->volume_gain / 2;
+            device->buffer_start = (device->buffer_start + 4) % BUFFER_SIZE;
+        }
+        if (sample > INT16_MAX || sample < INT16_MIN) {
+            sample = sample / scr_stream->volume_gain * (scr_stream->volume_gain - 1);
+            scr_stream->volume_gain--;
+            ALOGW("Reducing volume gain to %d", scr_stream->volume_gain);
+        }
+        dst[frames_read] = sample;
+    }
+    return frames_read;
+}
+
+static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
+        size_t bytes) {
+    struct scr_stream_in *scr_stream = (struct scr_stream_in *) stream;
+    struct audio_stream_in *primary = scr_stream->primary;
+    struct scr_audio_device *device = scr_stream->dev;
+
+    if (primary)
+        return primary->read(primary, buffer, bytes);
+
+    int64_t stats_start_time = get_time_us();
+    if (device->verbose_logging) {
+        ALOGV("in_read %d bytes", bytes);
+    }
+
+    pthread_mutex_lock(&device->lock);
+
+    int frame_size = stream_frame_size(&stream->common);
+    int frames_to_read = bytes / frame_size;
+    int sample_rate = scr_stream->sample_rate;
+    int64_t duration = frames_to_read * 1000000ll / sample_rate;
+
+    if (!device->in_active) {
+        activate_input(device, scr_stream, frames_to_read, duration);
+    }
+
+    int64_t ret_time = scr_stream->in_start_us + (scr_stream->frames_read + frames_to_read) * 1000000ll / sample_rate;
+    wait_for_ret_time(device, ret_time);
+
+    int available_frames = get_available_frames(device);
+
+    if (available_frames > MAX_CONSECUTIVE_BUFFERS * frames_to_read) {
+        if (device->verbose_logging || scr_stream->stats_excess < MAX_LOGS) {
+            ALOGW("available excess frames %d. This may cause buffer overrun in RecordThread", available_frames);
+        }
+        scr_stream->stats_excess++;
+    } else if (available_frames < frames_to_read && device->out_active) {
+        wait_for_frames(device, scr_stream, frames_to_read, duration);
+    }
+
+    available_frames = get_available_frames(device);
+
+    if (should_extend_silence(device, scr_stream, sample_rate, frames_to_read, available_frames, ret_time)) {
+        available_frames = 0;
+    }
 
     if (scr_stream->recording_silence != (available_frames < frames_to_read)) {
         if (scr_stream->recording_silence) {
             ALOGD("Silence finished");
-            latency_reported = true;
-            scr_stream->stats_starts++;
-            int latency = (int64_t) (now - ret_time) / 1000ll + scr_stream->stats_start_latency_tmp;
-            if (scr_stream->stats_start_latency_max < latency) {
-                scr_stream->stats_start_latency_max = latency;
-            }
-            scr_stream->stats_start_latency += latency;
-            scr_stream->stats_start_latency_tmp = 0;
+            log_start_stats(scr_stream, ret_time);
         } else {
             ALOGD("Starting recording silence");
         }
@@ -627,39 +682,21 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
         memset(buffer, 0, bytes);
     }
 
-    //TODO: handle stereo recording
-    int16_t *buff = (int16_t *)buffer;
-    int frames_read = 0;
-    for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
-        int sample = 0;
-        if (out_channels == 1) {
-            sample = device->buffer[device->buffer_start] * scr_stream->volume_gain;
-            device->buffer_start = (device->buffer_start + 1) % BUFFER_SIZE;
-        } else { // out_channels == 2
-            sample = (device->buffer[device->buffer_start] + device->buffer[(device->buffer_start + 1) % BUFFER_SIZE]) * scr_stream->volume_gain / 2;
-            device->buffer_start = (device->buffer_start + 2) % BUFFER_SIZE;
-        }
-        if (sample > INT16_MAX || sample < INT16_MIN) {
-            sample = sample / scr_stream->volume_gain * (scr_stream->volume_gain - 1);
-            scr_stream->volume_gain--;
-            ALOGW("Reducing volume gain to %d", scr_stream->volume_gain);
-        }
-        buff[frames_read] = sample;
-    }
-
+    int frames_read = copy_frames(device, scr_stream, (int16_t *) buffer, frames_to_read, available_frames);
     scr_stream->frames_read += frames_to_read;
+
     pthread_mutex_unlock(&device->lock);
 
-    if (frames_read > 0) {
+    if (available_frames > 0) {
         scr_stream->stats_data++;
     } else {
         scr_stream->stats_silence++;
     }
     if (device->verbose_logging) {
-        now = get_time_us();
-        int duration_ms = (now - start_time) / 1000ll;
+        int64_t now = get_time_us();
+        int duration_ms = (now - stats_start_time) / 1000ll;
         int latency_ms = (now - ret_time) / 1000ll;
-        ALOGV("read [%d/%d] frames in %d ms. Latency %d ms. Remaining %d frames", frames_read, frames_to_read - frames_read, duration_ms, latency_ms, get_available_frames(device, out_channels));
+        ALOGV("read [%d/%d] frames in %d ms. Latency %d ms. Remaining %d frames", frames_read, frames_to_read - frames_read, duration_ms, latency_ms, get_available_frames(device));
     }
     return bytes;
 }
@@ -770,6 +807,12 @@ static int adev_open_output_stream(struct audio_hw_device *device,
         out->stream.get_next_write_timestamp = out_get_next_write_timestamp;
     }
 
+    if (out == scr_dev->recorded_stream) {
+        scr_dev->out_channels = popcount(config->channel_mask);
+        scr_dev->out_format = config->format;
+        scr_dev->out_frame_size = audio_bytes_per_sample(scr_dev->out_format) * scr_dev->out_channels;
+    }
+
     *stream_out = &out->stream;
     ALOGV("stream out: %p primary: %p sample_rate: %d", out, out->primary, config->sample_rate);
     return 0;
@@ -807,6 +850,12 @@ static int adev_open_output_stream_v0(struct audio_hw_device *device,
         *stream_out = NULL;
         return ret;
     }
+
+        if (out == scr_dev->recorded_stream) {
+            scr_dev->out_channels = popcount(*channels);
+            scr_dev->out_format = *format;
+            scr_dev->out_frame_size = audio_bytes_per_sample(scr_dev->out_format) * scr_dev->out_channels;
+        }
 
     *stream_out = &out->stream;
     ALOGV("stream out: %p primary: %p sample_rate: %d", out, out->primary, *sample_rate);
@@ -1009,7 +1058,6 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
 
         struct audio_stream *as = &scr_dev->recorded_stream->stream.common;
         in->sample_rate = as->get_sample_rate(as);
-        in->out_channels = popcount(as->get_channels(as));
         in->stats_out_buffer_size = as->get_buffer_size(as) / stream_frame_size(as);
         *sample_rate = in->sample_rate;
         return 1;
@@ -1332,6 +1380,12 @@ static int adev_open(const hw_module_t* module, const char* name,
     scr_dev->out_active = false;
     scr_dev->verbose_logging = false;
 
+    scr_dev->buffer.int8 = malloc(BUFFER_SIZE);
+    if (scr_dev->buffer.int8 == NULL) {
+        ret = -ENOMEM;
+        goto err_open;
+    }
+
 
     pthread_mutex_init(&scr_dev->lock, NULL);
 
@@ -1361,7 +1415,7 @@ struct audio_module HAL_MODULE_INFO_SYM = {
             .version_minor = 0,
         #endif // SCR_SDK_VERSION >= 16
         .id = AUDIO_HARDWARE_MODULE_ID,
-        .name = "SCR audio HW HAL",
+        .name = "SCR audio HW HAL [" __DATE__ " " __TIME__ "]",
         .author = "Iwo Banas",
         .methods = &hal_module_methods,
     },
