@@ -606,17 +606,34 @@ static int copy_frames(struct scr_audio_device *device, struct scr_stream_in *sc
     int frames_read = 0;
     for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
         int sample = 0;
-        if (device->out_channels == 1) {
-            sample = device->buffer.int16[device->buffer_start / 2] * scr_stream->volume_gain;
-            device->buffer_start = (device->buffer_start + 2) % BUFFER_SIZE;
-        } else { // out_channels == 2
-            sample = (device->buffer.int16[device->buffer_start / 2] + device->buffer.int16[(device->buffer_start / 2 + 1) % BUFFER_SIZE]) * scr_stream->volume_gain / 2;
-            device->buffer_start = (device->buffer_start + 4) % BUFFER_SIZE;
-        }
-        if (sample > INT16_MAX || sample < INT16_MIN) {
-            sample = sample / scr_stream->volume_gain * (scr_stream->volume_gain - 1);
-            scr_stream->volume_gain--;
-            ALOGW("Reducing volume gain to %d", scr_stream->volume_gain);
+        if (device->out_format == AUDIO_FORMAT_PCM_16_BIT) {
+            if (device->out_channels == 1) {
+                sample = device->buffer.int16[device->buffer_start / 2] * scr_stream->volume_gain;
+                device->buffer_start = (device->buffer_start + 2) % BUFFER_SIZE;
+            } else { // out_channels == 2
+                sample = (device->buffer.int16[device->buffer_start / 2] + device->buffer.int16[(device->buffer_start / 2 + 1) % BUFFER_SIZE]) * scr_stream->volume_gain / 2;
+                device->buffer_start = (device->buffer_start + 4) % BUFFER_SIZE;
+            }
+            if (sample > INT16_MAX || sample < INT16_MIN) {
+                sample = sample / scr_stream->volume_gain * (scr_stream->volume_gain - 1);
+                scr_stream->volume_gain--;
+                ALOGW("Reducing volume gain to %d", scr_stream->volume_gain);
+            }
+        } else { // assume 32bit
+            int unscaled = 0;
+            if (device->out_channels == 1) {
+                unscaled = device->buffer.int32[device->buffer_start / 4];
+                device->buffer_start = (device->buffer_start + 4) % BUFFER_SIZE;
+            } else { // out_channels == 2
+                unscaled = (device->buffer.int32[device->buffer_start / 4]) / 2 + (device->buffer.int32[(device->buffer_start / 4 + 1) % BUFFER_SIZE]) / 2;
+                device->buffer_start = (device->buffer_start + 8) % BUFFER_SIZE;
+            }
+            sample = unscaled / ((1<<16) / scr_stream->volume_gain);
+            while ((sample > INT16_MAX || sample < INT16_MIN) && scr_stream->volume_gain > 1) {
+                scr_stream->volume_gain--;
+                ALOGW("Reducing volume gain to %d", scr_stream->volume_gain);
+                sample = unscaled / ((1<<16) / scr_stream->volume_gain);
+            }
         }
         dst[frames_read] = sample;
     }
@@ -814,7 +831,7 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     }
 
     *stream_out = &out->stream;
-    ALOGV("stream out: %p primary: %p sample_rate: %d", out, out->primary, config->sample_rate);
+    ALOGV("stream out: %p primary: %p sample_rate: %d channels: %d format: %X", out, out->primary, config->sample_rate, scr_dev->out_channels, scr_dev->out_format);
     return 0;
 }
 
