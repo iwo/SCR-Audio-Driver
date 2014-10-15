@@ -487,8 +487,13 @@ static int in_set_gain(struct audio_stream_in *stream, float gain)
     return 0;
 }
 
-static void skip_excess_frames(struct scr_audio_device *device, int frames_to_read) {
-    int target_frames_count = (frames_to_read + frames_to_read / 2);
+static int get_target_frames_count(struct scr_stream_in *scr_stream, int frames_to_read) {
+    int64_t delay_us = get_time_us() - scr_stream->in_start_us;
+    return (delay_us * scr_stream->sample_rate) / 1000000ll - scr_stream->frames_read + frames_to_read; // frames_to_read is an additional padding buffer
+}
+
+static void skip_excess_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int frames_to_read) {
+    int target_frames_count = get_target_frames_count(scr_stream, frames_to_read);
     int available_frames = get_available_frames(device);
     if (available_frames > target_frames_count) {
         device->buffer_start = (device->buffer_start + (available_frames - target_frames_count) * device->out_frame_size) % BUFFER_SIZE;
@@ -510,7 +515,7 @@ static void activate_input(struct scr_audio_device *device, struct scr_stream_in
     pthread_mutex_lock(&device->lock);
 
     device->in_active = true;
-    skip_excess_frames(device, frames_to_read);
+    skip_excess_frames(device, scr_stream, frames_to_read);
 }
 
 static void wait_for_ret_time(struct scr_audio_device *device, int64_t ret_time) {
@@ -575,9 +580,8 @@ static void wait_for_frames(struct scr_audio_device *device, struct scr_stream_i
 
 static bool should_extend_silence(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int sample_rate, int frames_to_read, int available_frames, int64_t ret_time) {
     if (scr_stream->recording_silence && device->out_active) {
-        int64_t now = get_time_us();
         int64_t duration = frames_to_read * 1000000ll / sample_rate;
-        int frames_to_catch_up = ((now - ret_time) * (int64_t) sample_rate) / 1000000ll + frames_to_read; //TODO: make sure that we need this one buffer padding
+        int frames_to_catch_up = get_target_frames_count(scr_stream, frames_to_read);
 
         if (available_frames < frames_to_catch_up) {
             if (device->verbose_logging) {
@@ -670,11 +674,14 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
 
     int available_frames = get_available_frames(device);
 
-    if (available_frames > MAX_CONSECUTIVE_BUFFERS * frames_to_read) {
+    int target_frames_count = get_target_frames_count(scr_stream, frames_to_read); // ideally we should have that much frames in the buffer
+    // allow one full buffer excess and some small number (10) to compensate the time drift caused by in_read processing time
+    if (available_frames > target_frames_count + frames_to_read + 10) {
         if (device->verbose_logging || scr_stream->stats_excess < MAX_LOGS) {
-            ALOGW("available excess frames %d. This may cause buffer overrun in RecordThread", available_frames);
+            ALOGW("available excess frames %d > %d", available_frames, target_frames_count);
         }
         scr_stream->stats_excess++;
+        skip_excess_frames(device, scr_stream, frames_to_read);
     } else if (available_frames < frames_to_read && device->out_active) {
         wait_for_frames(device, scr_stream, frames_to_read, duration);
     }
@@ -689,6 +696,8 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
         if (scr_stream->recording_silence) {
             ALOGD("Silence finished");
             log_start_stats(scr_stream, ret_time);
+            skip_excess_frames(device, scr_stream, frames_to_read);
+            available_frames = get_available_frames(device);
         } else {
             ALOGD("Starting recording silence");
         }
