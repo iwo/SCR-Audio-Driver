@@ -216,6 +216,9 @@ static int out_standby(struct audio_stream *stream)
     if (scr_stream == scr_stream->dev->recorded_stream) {
         scr_stream->dev->out_active = false;
     }
+    if (scr_stream->dev->verbose_logging) {
+        ALOGV("%s %p", __func__, stream);
+    }
     return primary->standby(primary);
 }
 
@@ -233,7 +236,11 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     if (scr_stream->dev->verbose_logging) {
         ALOGV("%s %p %s", __func__, stream, kvpairs);
     }
-    return primary->set_parameters(primary, kvpairs);
+    int result =  primary->set_parameters(primary, kvpairs);
+    if (scr_stream->dev->verbose_logging) {
+        ALOGV("%s %p %s result: %d", __func__, stream, kvpairs, result);
+    }
+    return result;
 }
 
 static char * out_get_parameters(const struct audio_stream *stream, const char *keys)
@@ -840,6 +847,12 @@ static ssize_t in_read_mix(struct audio_stream_in *stream, void *buffer, size_t 
             int64_t now = get_time_us();
             int duration_ms = (now - stats_start_time) / 1000ll;
             ALOGV("read [%d/%d] frames in %d ms. Remaining %d frames", frames_read, frames_to_read - frames_read, duration_ms, get_available_frames(device));
+        }
+    } else {
+        if (device->verbose_logging) {
+            int64_t now = get_time_us();
+            int duration_ms = (now - stats_start_time) / 1000ll;
+            ALOGV("in_read_mix primary driver returned %d in %d ms. Remaining %d frames", result, duration_ms, get_available_frames(device));
         }
     }
     return result;
