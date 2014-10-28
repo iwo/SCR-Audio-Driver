@@ -143,6 +143,7 @@ struct scr_stream_in {
     int stats_starts;
     int stats_delays;
     int stats_excess;
+    int stats_consecutive_silence;
 };
 
 static inline int64_t get_time_us() {
@@ -795,28 +796,33 @@ static ssize_t in_read_mix(struct audio_stream_in *stream, void *buffer, size_t 
         }
 
         if (available_frames > max_frames_available) {
+            scr_stream->stats_excess++;
             if (device->verbose_logging || scr_stream->stats_excess < MAX_LOGS) {
                 ALOGW("available excess frames %d > %d", available_frames, max_frames_available);
             }
-            scr_stream->stats_excess++;
             skip_to_frame_count(device, max_frames_available);
             available_frames = max_frames_available;
         }
 
-        // don't start if we don't have some extra padding frames
-        if (scr_stream->recording_silence && available_frames < min_frames_available) {
-            available_frames = 0;
-        }
-
-        if (scr_stream->recording_silence && available_frames > 0) {
-            ALOGD("Silence finished");
-            scr_stream->recording_silence = false;
-            scr_stream->stats_starts++;
-        }
-
-        if (!scr_stream->recording_silence && available_frames == 0) {
+        if (scr_stream->recording_silence) {
+            // don't start if we don't have some extra padding frames
+            if (available_frames < min_frames_available) {
+                available_frames = 0;
+            } else {
+                ALOGD("Silence finished");
+                scr_stream->recording_silence = false;
+                scr_stream->stats_starts++;
+                if (scr_stream->stats_consecutive_silence < 5) {
+                    scr_stream->stats_delays++;
+                    if (device->verbose_logging || scr_stream->stats_delays < MAX_LOGS) {
+                        ALOGE("Suspeciously short silense %d. Probably caused by output buffers delay", scr_stream->stats_consecutive_silence);
+                    }
+                }
+            }
+        } else if (available_frames < frames_to_read) {
             ALOGD("Starting recording silence");
             scr_stream->recording_silence = true;
+            scr_stream->stats_consecutive_silence = 0;
         }
 
         int frames_read = mix_frames(device, scr_stream, (int16_t *) buffer, frames_to_read, available_frames);
@@ -826,6 +832,7 @@ static ssize_t in_read_mix(struct audio_stream_in *stream, void *buffer, size_t 
 
         if (scr_stream->recording_silence) {
             scr_stream->stats_silence++;
+            scr_stream->stats_consecutive_silence++;
         } else {
             scr_stream->stats_data++;
         }
