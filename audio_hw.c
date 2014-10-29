@@ -125,6 +125,7 @@ struct scr_stream_in {
     struct audio_stream_in *primary;
     struct scr_audio_device *dev;
     uint32_t sample_rate;
+    int out_sample_rate_divider;
     int volume_gain;
     int64_t in_start_us;
     int64_t frames_read;
@@ -152,10 +153,10 @@ static inline int64_t get_time_us() {
     return (int64_t) now.tv_sec * 1000000ll + now.tv_nsec / 1000ll;
 }
 
-static int get_available_frames(struct scr_audio_device *device) {
+static int get_available_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream) {
     if (device->out_frame_size == 0)
         return 0;
-    return ((device->buffer_end + BUFFER_SIZE - device->buffer_start) % BUFFER_SIZE) / device->out_frame_size;
+    return ((device->buffer_end + BUFFER_SIZE - device->buffer_start) % BUFFER_SIZE) / (device->out_frame_size * scr_stream->out_sample_rate_divider);
 }
 
 static uint32_t out_get_sample_rate(const struct audio_stream *stream)
@@ -509,16 +510,16 @@ static int get_target_frames_count(struct scr_stream_in *scr_stream, int frames_
     int64_t delay_us = get_time_us() - scr_stream->in_start_us;
     return (delay_us * scr_stream->sample_rate) / 1000000ll - scr_stream->frames_read + frames_to_read; // frames_to_read is an additional padding buffer
 }
-static void skip_to_frame_count(struct scr_audio_device *device, int frames_count) {
-    int available_frames = get_available_frames(device);
+static void skip_to_frame_count(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int frames_count) {
+    int available_frames = get_available_frames(device, scr_stream);
     device->buffer_start = (device->buffer_start + (available_frames - frames_count) * device->out_frame_size) % BUFFER_SIZE;
 }
 
 static void skip_excess_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int frames_to_read) {
     int target_frames_count = get_target_frames_count(scr_stream, frames_to_read);
-    int available_frames = get_available_frames(device);
+    int available_frames = get_available_frames(device, scr_stream);
     if (available_frames > target_frames_count) {
-        skip_to_frame_count(device, target_frames_count);
+        skip_to_frame_count(device, scr_stream, target_frames_count);
     }
 }
 
@@ -556,7 +557,7 @@ static void wait_for_ret_time(struct scr_audio_device *device, int64_t ret_time)
 }
 
 static void wait_for_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int frames_to_read, int64_t duration) {
-    int available_frames = get_available_frames(device);
+    int available_frames = get_available_frames(device, scr_stream);
     //TODO: replace loops below with single consistent loop
     if (scr_stream->recording_silence) {
         // output just started, allow some time for output streem initialization
@@ -569,7 +570,7 @@ static void wait_for_frames(struct scr_audio_device *device, struct scr_stream_i
             }
             usleep(duration);
             pthread_mutex_lock(&device->lock);
-            available_frames = get_available_frames(device);
+            available_frames = get_available_frames(device, scr_stream);
         }
     } else {
         int attempts = 0;
@@ -578,7 +579,7 @@ static void wait_for_frames(struct scr_audio_device *device, struct scr_stream_i
             attempts++;
             usleep(READ_RETRY_WAIT);
             pthread_mutex_lock(&device->lock);
-            available_frames = get_available_frames(device);
+            available_frames = get_available_frames(device, scr_stream);
         }
 
         int latency = (attempts * READ_RETRY_WAIT / 1000ll);
@@ -627,7 +628,7 @@ static void log_start_stats(struct scr_stream_in *scr_stream, int64_t ret_time) 
     scr_stream->stats_start_latency_tmp = 0;
 }
 
-static inline int32_t get_32bit_mono_sample(struct scr_audio_device *device) {
+static inline int32_t get_32bit_mono_out_sample(struct scr_audio_device *device) {
     int sample = 0;
     if (device->out_format == AUDIO_FORMAT_PCM_16_BIT) {
         if (device->out_channels == 1) {
@@ -649,8 +650,29 @@ static inline int32_t get_32bit_mono_sample(struct scr_audio_device *device) {
     return sample;
 }
 
+static inline int32_t get_32bit_mono_sample(struct scr_audio_device *device, struct scr_stream_in *scr_stream) {
+    switch (scr_stream->out_sample_rate_divider) {
+        case 1:
+            return get_32bit_mono_out_sample(device);
+        case 2:
+            return get_32bit_mono_out_sample(device) / 2
+                    + get_32bit_mono_out_sample(device) / 2;
+        case 3:
+            return get_32bit_mono_out_sample(device) / 3
+                    + get_32bit_mono_out_sample(device) / 3
+                    + get_32bit_mono_out_sample(device) / 3;
+        case 4:
+            return get_32bit_mono_out_sample(device) / 4
+                    + get_32bit_mono_out_sample(device) / 4
+                    + get_32bit_mono_out_sample(device) / 4
+                    + get_32bit_mono_out_sample(device) / 4;
+        default:
+            return 0;
+    }
+}
+
 static inline int32_t get_16bit_scaled_mono_sample(struct scr_audio_device *device, struct scr_stream_in *scr_stream) {
-    int32_t unscaled = get_32bit_mono_sample(device);
+    int32_t unscaled = get_32bit_mono_sample(device, scr_stream);
     int32_t sample = unscaled / ((1<<16) / scr_stream->volume_gain);
     while ((sample > INT16_MAX || sample < INT16_MIN) && scr_stream->volume_gain > 1) {
         scr_stream->volume_gain--;
@@ -713,7 +735,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
     int64_t ret_time = scr_stream->in_start_us + (scr_stream->frames_read + frames_to_read) * 1000000ll / sample_rate;
     wait_for_ret_time(device, ret_time);
 
-    int available_frames = get_available_frames(device);
+    int available_frames = get_available_frames(device, scr_stream);
 
     int target_frames_count = get_target_frames_count(scr_stream, frames_to_read); // ideally we should have that much frames in the buffer
     // allow one full buffer excess and some small number (10) to compensate the time drift caused by in_read processing time
@@ -727,7 +749,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
         wait_for_frames(device, scr_stream, frames_to_read, duration);
     }
 
-    available_frames = get_available_frames(device);
+    available_frames = get_available_frames(device, scr_stream);
 
     if (should_extend_silence(device, scr_stream, sample_rate, frames_to_read, available_frames, ret_time)) {
         available_frames = 0;
@@ -738,7 +760,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
             ALOGD("Silence finished");
             log_start_stats(scr_stream, ret_time);
             skip_excess_frames(device, scr_stream, frames_to_read);
-            available_frames = get_available_frames(device);
+            available_frames = get_available_frames(device, scr_stream);
         } else {
             ALOGD("Starting recording silence");
         }
@@ -763,7 +785,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
         int64_t now = get_time_us();
         int duration_ms = (now - stats_start_time) / 1000ll;
         int latency_ms = (now - ret_time) / 1000ll;
-        ALOGV("read [%d/%d] frames in %d ms. Latency %d ms. Remaining %d frames", frames_read, frames_to_read - frames_read, duration_ms, latency_ms, get_available_frames(device));
+        ALOGV("read [%d/%d] frames in %d ms. Latency %d ms. Remaining %d frames", frames_read, frames_to_read - frames_read, duration_ms, latency_ms, get_available_frames(device, scr_stream));
     }
     return bytes;
 }
@@ -789,7 +811,7 @@ static ssize_t in_read_mix(struct audio_stream_in *stream, void *buffer, size_t 
         int min_frames_available = frames_to_read * 2;
         int max_frames_available = frames_to_read * 4;
 
-        int available_frames = get_available_frames(device);
+        int available_frames = get_available_frames(device, scr_stream);
 
         if (!device->in_active) {
             ALOGD("Input active");
@@ -797,7 +819,7 @@ static ssize_t in_read_mix(struct audio_stream_in *stream, void *buffer, size_t 
             scr_stream->frames_read = 0L;
             scr_stream->stats_in_buffer_size = frames_to_read;
             if (available_frames > max_frames_available) {
-                skip_to_frame_count(device, min_frames_available);
+                skip_to_frame_count(device, scr_stream, min_frames_available);
                 available_frames = max_frames_available;
             }
         }
@@ -807,7 +829,7 @@ static ssize_t in_read_mix(struct audio_stream_in *stream, void *buffer, size_t 
             if (device->verbose_logging || scr_stream->stats_excess < MAX_LOGS) {
                 ALOGW("available excess frames %d > %d", available_frames, max_frames_available);
             }
-            skip_to_frame_count(device, max_frames_available);
+            skip_to_frame_count(device, scr_stream, max_frames_available);
             available_frames = max_frames_available;
         }
 
@@ -846,13 +868,13 @@ static ssize_t in_read_mix(struct audio_stream_in *stream, void *buffer, size_t 
         if (device->verbose_logging) {
             int64_t now = get_time_us();
             int duration_ms = (now - stats_start_time) / 1000ll;
-            ALOGV("read [%d/%d] frames in %d ms. Remaining %d frames", frames_read, frames_to_read - frames_read, duration_ms, get_available_frames(device));
+            ALOGV("read [%d/%d] frames in %d ms. Remaining %d frames", frames_read, frames_to_read - frames_read, duration_ms, get_available_frames(device, scr_stream));
         }
     } else {
         if (device->verbose_logging) {
             int64_t now = get_time_us();
             int duration_ms = (now - stats_start_time) / 1000ll;
-            ALOGV("in_read_mix primary driver returned %d in %d ms. Remaining %d frames", result, duration_ms, get_available_frames(device));
+            ALOGV("in_read_mix primary driver returned %d in %d ms. Remaining %d frames", result, duration_ms, get_available_frames(device, scr_stream));
         }
     }
     return result;
@@ -1206,30 +1228,34 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
     in->dev = scr_dev;
 
     *stream_in = in;
-
-    if (*sample_rate >= 44100) {
-        ALOGV("opening scr input stream");
-        if (scr_dev->recorded_stream == NULL) {
-            ALOGE("output stream not ready!");
-            return EINVAL;
-        }
-        scr_dev->in_open = true;
-        apply_steam_config(in);
-
+    
+    if (scr_dev->recorded_stream != NULL) {
         struct audio_stream *as = &scr_dev->recorded_stream->stream.common;
-        in->sample_rate = as->get_sample_rate(as);
-        in->stats_out_buffer_size = as->get_buffer_size(as) / stream_frame_size(as);
-        *sample_rate = in->sample_rate;
-        if (in->mix_mic) {
-            ALOGV("opening input stream for mixing");
-            in->stream.read = in_read_mix;
-            return 0;
+        uint32_t out_sample_rate = as->get_sample_rate(as);
+        uint32_t req_sample_rate = *sample_rate;
+    
+        if ((out_sample_rate % req_sample_rate) == 0 && out_sample_rate / req_sample_rate <= 4) {
+            ALOGV("opening scr input stream");
+            scr_dev->in_open = true;
+            apply_steam_config(in);
+    
+            in->sample_rate = req_sample_rate;
+            in->out_sample_rate_divider = out_sample_rate / req_sample_rate;
+            in->stats_out_buffer_size = as->get_buffer_size(as) / stream_frame_size(as);
+            if (in->mix_mic) {
+                ALOGV("opening input stream for mixing");
+                in->stream.read = in_read_mix;
+                return 0;
+            } else {
+                in->primary = NULL;
+                return 1;
+            }
         } else {
-            in->primary = NULL;
-            return 1;
+            ALOGV("opening standard input stream at %d (out %d)", req_sample_rate, out_sample_rate);
+            return 0;
         }
     } else {
-        ALOGV("opening standard input stream");
+        ALOGV("No output stream active, opening standard input");
         return 0;
     }
 }
@@ -1252,11 +1278,18 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     if (status < 0)
         return -ENOMEM;
 
+    ALOGV("Open input stream 0x%X8, sample rate: %d", devices, config->sample_rate);
+
     if (status == 0) {
+        uint32_t req_sample_rate = config->sample_rate;
         if (scr_dev->qcom) {
             ret = scr_dev->primary.qcom->open_input_stream(primary, handle, devices, config, &in->primary);
         } else {
             ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
+        }
+        if (in->mix_mic && (config->sample_rate != req_sample_rate || config->format != AUDIO_FORMAT_PCM_16_BIT)) {
+            ALOGW("Input stream config changed to %d 0x%X8 return value %d", config->sample_rate, config->format, ret);
+            //TODO: handle reconfiguration
         }
         if (ret) {
             ALOGE("Error opening input stream %d", ret);
