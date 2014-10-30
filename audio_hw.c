@@ -1150,7 +1150,7 @@ static size_t adev_get_input_buffer_size_common(const struct audio_hw_device *de
     // the actual size will be returned from in_get_buffer_size
     if (recorded_stream != NULL) {
         struct audio_stream* stream = &recorded_stream->stream.common;
-        size_t size = 4 * stream->get_buffer_size(stream) / popcount(stream->get_channels(stream));
+        size_t size = 8 * stream->get_buffer_size(stream) / popcount(stream->get_channels(stream));
         return size > MAX_DEVICE_BUFFER_SIZE ? MAX_DEVICE_BUFFER_SIZE : size;
     }
     return MAX_DEVICE_BUFFER_SIZE;
