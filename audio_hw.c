@@ -102,6 +102,7 @@ struct scr_audio_device {
 
     int out_channels;
     audio_format_t out_format;
+    uint32_t out_sample_rate;
     int out_frame_size;
 
     bool verbose_logging;
@@ -990,6 +991,7 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     if (out == scr_dev->recorded_stream) {
         scr_dev->out_channels = popcount(config->channel_mask);
         scr_dev->out_format = config->format;
+        scr_dev->out_sample_rate = config->sample_rate;
         scr_dev->out_frame_size = audio_bytes_per_sample(scr_dev->out_format) * scr_dev->out_channels;
     }
 
@@ -1034,6 +1036,7 @@ static int adev_open_output_stream_v0(struct audio_hw_device *device,
         if (out == scr_dev->recorded_stream) {
             scr_dev->out_channels = popcount(*channels);
             scr_dev->out_format = *format;
+            scr_dev->out_sample_rate = *sample_rate;
             scr_dev->out_frame_size = audio_bytes_per_sample(scr_dev->out_format) * scr_dev->out_channels;
         }
 
@@ -1369,9 +1372,10 @@ static void adev_close_input_stream(struct audio_hw_device *device,
         int avg_latency = scr_stream->stats_late_buffers == 0 ? 0 : scr_stream->stats_latency / (int64_t) scr_stream->stats_late_buffers;
         int start_avg_latency = scr_stream->stats_starts == 0 ? 0 : scr_stream->stats_start_latency / scr_stream->stats_starts;
 
-        ALOGD("Stats %lld %d [%d/%d] in:%d out:%d late:%d (%d/%d ms) starts:%d (%d/%d ms) delays:%d overflows:%d excess:%d",
+        ALOGD("Stats %lld %d/%d [%d/%d] in:%d out:%d late:%d (%d/%d ms) starts:%d (%d/%d ms) delays:%d overflows:%d excess:%d",
             scr_stream->frames_read,
             scr_stream->sample_rate,
+            scr_dev->out_sample_rate,
             scr_stream->stats_data,
             scr_stream->stats_silence,
             scr_stream->stats_in_buffer_size,
@@ -1393,7 +1397,7 @@ static void adev_close_input_stream(struct audio_hw_device *device,
             ALOGW("Can't open log file %s", strerror(errno));
         } else {
             int now = time(NULL);
-            fprintf(log, "%d %lld %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+            fprintf(log, "%d %lld %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
                 now,
                 scr_stream->frames_read,
                 scr_stream->sample_rate,
@@ -1409,7 +1413,8 @@ static void adev_close_input_stream(struct audio_hw_device *device,
                 scr_stream->stats_start_latency_max,
                 scr_stream->stats_delays,
                 overflows,
-                scr_stream->stats_excess
+                scr_stream->stats_excess,
+                scr_dev->out_sample_rate
             );
             fclose(log);
         }
