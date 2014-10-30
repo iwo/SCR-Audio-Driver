@@ -32,6 +32,7 @@
 #define MAX_CONSECUTIVE_BUFFERS 3
 // buffer size should be above 10ms to avoid scheduling related issues
 #define MIN_BUFFER_SIZE 440
+#define MAX_DEVICE_BUFFER_SIZE (8 * 1024)
 #define MAX_LOGS 10
 
 #if SCR_SDK_VERSION >= 16
@@ -1138,9 +1139,7 @@ static int adev_get_mic_mute(const struct audio_hw_device *device, bool *state)
     return primary->get_mic_mute(primary, state);
 }
 
-#if SCR_SDK_VERSION >= 16
-static size_t adev_get_input_buffer_size(const struct audio_hw_device *device,
-                                         const struct audio_config *config)
+static size_t adev_get_input_buffer_size_common(const struct audio_hw_device *device)
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     struct scr_stream_out *recorded_stream = scr_dev->recorded_stream;
@@ -1148,9 +1147,17 @@ static size_t adev_get_input_buffer_size(const struct audio_hw_device *device,
     // the actual size will be returned from in_get_buffer_size
     if (recorded_stream != NULL) {
         struct audio_stream* stream = &recorded_stream->stream.common;
-        return 4 * stream->get_buffer_size(stream);
+        size_t size = 4 * stream->get_buffer_size(stream) / popcount(stream->get_channels(stream));
+        return size > MAX_DEVICE_BUFFER_SIZE ? MAX_DEVICE_BUFFER_SIZE : size;
     }
-    return 8 * 2048;
+    return MAX_DEVICE_BUFFER_SIZE;
+}
+
+#if SCR_SDK_VERSION >= 16
+static size_t adev_get_input_buffer_size(const struct audio_hw_device *device,
+                                         const struct audio_config *config)
+{
+    return adev_get_input_buffer_size_common(device);
 }
 
 #else
@@ -1159,15 +1166,7 @@ static size_t adev_get_input_buffer_size_v0(const struct audio_hw_device *device
                                          uint32_t sample_rate, int format,
                                          int channel_count)
 {
-    struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
-    struct scr_stream_out *recorded_stream = scr_dev->recorded_stream;
-    // return something big to avoid buffer overruns
-    // the actual size will be returned from in_get_buffer_size
-    if (recorded_stream != NULL) {
-        struct audio_stream* stream = &recorded_stream->stream.common;
-        return 4 * stream->get_buffer_size(stream);
-    }
-    return 8 * 2048;
+    return adev_get_input_buffer_size_common(device);
 }
 
 #endif // SCR_SDK_VERSION >= 16
