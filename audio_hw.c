@@ -1237,7 +1237,7 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
         uint32_t req_sample_rate = *sample_rate;
     
         if ((out_sample_rate % req_sample_rate) == 0 && out_sample_rate / req_sample_rate <= 4) {
-            ALOGV("opening scr input stream");
+            ALOGV("opening scr input stream at %d", req_sample_rate);
             scr_dev->in_open = true;
             apply_steam_config(in);
     
@@ -1252,6 +1252,16 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
                 in->primary = NULL;
                 return 1;
             }
+        } else if (req_sample_rate >= 44100) {
+            ALOGE("Opened SCR input stream will require resampling %d => %d", out_sample_rate, req_sample_rate);
+            scr_dev->in_open = true;
+            apply_steam_config(in);
+
+            in->sample_rate = out_sample_rate;
+            in->out_sample_rate_divider = 1;
+            in->stats_out_buffer_size = as->get_buffer_size(as) / stream_frame_size(as);
+            in->primary = NULL;
+            return 1;
         } else {
             ALOGV("opening standard input stream at %d (out %d)", req_sample_rate, out_sample_rate);
             return 0;
