@@ -126,7 +126,7 @@ struct scr_stream_in {
     int padding[10];
     struct audio_stream_in *primary;
     struct scr_audio_device *dev;
-    audio_channel_mask_t channel_mask;
+    uint32_t channel_mask;
     uint32_t sample_rate;
     int out_sample_rate_divider;
     int volume_gain;
