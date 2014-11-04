@@ -126,6 +126,7 @@ struct scr_stream_in {
     int padding[10];
     struct audio_stream_in *primary;
     struct scr_audio_device *dev;
+    audio_channel_mask_t channel_mask;
     uint32_t sample_rate;
     int out_sample_rate_divider;
     int volume_gain;
@@ -419,9 +420,9 @@ static uint32_t in_get_channels(const struct audio_stream *stream)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    if (!scr_stream->mix_mic && primary)
+    if (primary)
         return primary->get_channels(primary);
-    return AUDIO_CHANNEL_IN_MONO;
+    return scr_stream->channel_mask;
 }
 
 static audio_format_t in_get_format(const struct audio_stream *stream)
@@ -629,30 +630,27 @@ static void log_start_stats(struct scr_stream_in *scr_stream, int64_t ret_time) 
     scr_stream->stats_start_latency += latency;
     scr_stream->stats_start_latency_tmp = 0;
 }
-
-static inline int32_t get_32bit_mono_out_sample(struct scr_audio_device *device) {
+static inline int32_t get_32bit_out_sample(struct scr_audio_device *device) {
     int sample = 0;
     if (device->out_format == AUDIO_FORMAT_PCM_16_BIT) {
-        if (device->out_channels == 1) {
-            sample = device->buffer.int16[device->buffer_start / 2] << 16;
-            device->buffer_start = (device->buffer_start + 2) % BUFFER_SIZE;
-        } else { // out_channels == 2
-            sample = (device->buffer.int16[device->buffer_start / 2] + device->buffer.int16[(device->buffer_start / 2 + 1) % BUFFER_SIZE]) << 15;
-            device->buffer_start = (device->buffer_start + 4) % BUFFER_SIZE;
-        }
+        sample = device->buffer.int16[device->buffer_start / 2] << 16;
+        device->buffer_start = (device->buffer_start + 2) % BUFFER_SIZE;
     } else { // assume 32bit
-        if (device->out_channels == 1) {
-            sample = device->buffer.int32[device->buffer_start / 4];
-            device->buffer_start = (device->buffer_start + 4) % BUFFER_SIZE;
-        } else { // out_channels == 2
-            sample = (device->buffer.int32[device->buffer_start / 4]) / 2 + (device->buffer.int32[(device->buffer_start / 4 + 1) % BUFFER_SIZE]) / 2;
-            device->buffer_start = (device->buffer_start + 8) % BUFFER_SIZE;
-        }
+        sample = device->buffer.int32[device->buffer_start / 4];
+        device->buffer_start = (device->buffer_start + 4) % BUFFER_SIZE;
     }
     return sample;
 }
 
-static inline int32_t get_32bit_mono_sample(struct scr_audio_device *device, struct scr_stream_in *scr_stream) {
+static inline int32_t get_32bit_mono_out_sample(struct scr_audio_device *device) {
+    if (device->out_channels == 1) {
+        return get_32bit_out_sample(device);
+    } else { // out_channels == 2
+        return get_32bit_out_sample(device) / 2 + get_32bit_out_sample(device) / 2;
+    }
+}
+
+static inline int32_t get_32bit_mono_frame(struct scr_audio_device *device, struct scr_stream_in *scr_stream) {
     switch (scr_stream->out_sample_rate_divider) {
         case 1:
             return get_32bit_mono_out_sample(device);
@@ -673,8 +671,23 @@ static inline int32_t get_32bit_mono_sample(struct scr_audio_device *device, str
     }
 }
 
-static inline int32_t get_16bit_scaled_mono_sample(struct scr_audio_device *device, struct scr_stream_in *scr_stream) {
-    int32_t unscaled = get_32bit_mono_sample(device, scr_stream);
+static inline void get_32bit_stereo_frame(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int32_t *left, int32_t *right) {
+    if (scr_stream->out_sample_rate_divider == 1) {
+        *left = get_32bit_out_sample(device);
+        *right = get_32bit_out_sample(device);
+        return;
+    }
+    int32_t l = 0, r = 0;
+    int i;
+    for (i = 0; i < scr_stream->out_sample_rate_divider; i++) {
+        l += get_32bit_out_sample(device) / scr_stream->out_sample_rate_divider;
+        r += get_32bit_out_sample(device) / scr_stream->out_sample_rate_divider;
+    }
+    *left = l;
+    *right = r;
+}
+
+static inline int32_t apply_gain(struct scr_stream_in *scr_stream, int32_t unscaled) {
     int32_t sample = unscaled / ((1<<16) / scr_stream->volume_gain);
     while ((sample > INT16_MAX || sample < INT16_MIN) && scr_stream->volume_gain > 1) {
         scr_stream->volume_gain--;
@@ -685,26 +698,49 @@ static inline int32_t get_16bit_scaled_mono_sample(struct scr_audio_device *devi
 }
 
 static int copy_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int16_t *dst, int frames_to_read, int available_frames) {
-    //TODO: handle stereo recording
     int frames_read = 0;
-    for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
-        dst[frames_read] = get_16bit_scaled_mono_sample(device, scr_stream);
+    int channels_count = popcount(scr_stream->stream.common.get_channels(&scr_stream->stream.common));
+    if (channels_count == 1) { // mono
+        for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
+            dst[frames_read] = apply_gain(scr_stream, get_32bit_mono_frame(device, scr_stream));
+        }
+    } else { // stereo
+        int32_t l, r;
+        for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
+            get_32bit_stereo_frame(device, scr_stream, &l, &r);
+            dst[frames_read * 2] = apply_gain(scr_stream, l);
+            dst[frames_read * 2 + 1] = apply_gain(scr_stream, r);
+        }
     }
     return frames_read;
 }
 
+static inline int16_t clip_to_16bit(int32_t sample) {
+    if (sample > INT16_MAX) {
+        return INT16_MAX;
+    } else if (sample < INT16_MIN) {
+        return INT16_MIN;
+    }
+    return sample;
+}
+
 static int mix_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int16_t *dst, int frames_to_read, int available_frames) {
     int frames_read = 0;
-    for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
-        // mix
-        int32_t sample = dst[frames_read] + get_16bit_scaled_mono_sample(device, scr_stream);
-        // and clip
-        if (sample > INT16_MAX) {
-            sample = INT16_MAX;
-        } else if (sample < INT16_MIN) {
-            sample = INT16_MIN;
+    int channels_count = popcount(scr_stream->stream.common.get_channels(&scr_stream->stream.common));
+    if (channels_count == 1) { // mono
+        for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
+            int32_t sample = dst[frames_read] + apply_gain(scr_stream, get_32bit_mono_frame(device, scr_stream));
+            dst[frames_read] = clip_to_16bit(sample);
         }
-        dst[frames_read] = sample;
+    } else { // stereo
+        int32_t l, r, i = 0;
+        for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
+            get_32bit_stereo_frame(device, scr_stream, &l, &r);
+            l = apply_gain(scr_stream, l) + dst[frames_read * 2];
+            r = apply_gain(scr_stream, l) + dst[frames_read * 2 + 1];
+            dst[frames_read * 2] = clip_to_16bit(l);
+            dst[frames_read * 2 + 1] = clip_to_16bit(r);
+        }
     }
     return frames_read;
 }
@@ -1289,7 +1325,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     if (status < 0)
         return -ENOMEM;
 
-    ALOGV("Open input stream 0x%X8, sample rate: %d", devices, config->sample_rate);
+    ALOGV("Open input stream 0x%08X, sample rate: %d, channels: 0x%08X", devices, config->sample_rate, config->channel_mask);
 
     if (status == 0) {
         uint32_t req_sample_rate = config->sample_rate;
@@ -1299,7 +1335,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
             ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
         }
         if (in->mix_mic && (config->sample_rate != req_sample_rate || config->format != AUDIO_FORMAT_PCM_16_BIT)) {
-            ALOGW("Input stream config changed to %d 0x%X8 return value %d", config->sample_rate, config->format, ret);
+            ALOGW("Input stream config changed to %d 0x%08X return value %d", config->sample_rate, config->format, ret);
             //TODO: handle reconfiguration
         }
         if (ret) {
@@ -1309,6 +1345,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
             return ret;
         }
     }
+    in->channel_mask = config->channel_mask;
 
     *stream_in = &in->stream;
     ALOGV("returning input stream %p", in);
@@ -1347,6 +1384,7 @@ static int adev_open_input_stream_v0(struct audio_hw_device *device, uint32_t de
             return ret;
         }
     }
+    in->channel_mask = *channels;
 
     *stream_in = &in->stream;
     ALOGV("returning input stream %p", in);
