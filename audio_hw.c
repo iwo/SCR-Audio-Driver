@@ -996,7 +996,11 @@ static int adev_open_output_stream(struct audio_hw_device *device,
                                    audio_devices_t devices,
                                    audio_output_flags_t flags,
                                    struct audio_config *config,
-                                   struct audio_stream_out **stream_out)
+                                   struct audio_stream_out **stream_out
+                                   #if SCR_SDK_VERSION >= 20
+                                   ,const char *address
+                                   #endif
+                                   )
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary.current;
@@ -1011,7 +1015,11 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     if (scr_dev->qcom) {
         ret = scr_dev->primary.qcom->open_output_stream(primary, handle, devices, flags, config, &out->primary);
     } else {
+        #if SCR_SDK_VERSION >= 20
+        ret = primary->open_output_stream(primary, handle, devices, flags, config, &out->primary, address);
+        #else
         ret = primary->open_output_stream(primary, handle, devices, flags, config, &out->primary);
+        #endif
     }
     if (ret) {
         ALOGE("Error opening output stream %d", ret);
@@ -1041,10 +1049,18 @@ static int adev_detect_qcom_open_output_stream(struct audio_hw_device *device,
                                    audio_devices_t devices,
                                    audio_output_flags_t flags,
                                    struct audio_config *config,
-                                   struct audio_stream_out **stream_out)
+                                   struct audio_stream_out **stream_out
+                                   #if SCR_SDK_VERSION >= 20
+                                   ,const char *address
+                                   #endif
+                                   )
 {
     convert_to_qcom(device);
+    #if SCR_SDK_VERSION >= 20
+    return adev_open_output_stream(device, handle, devices, flags, config, stream_out, address);
+    #else
     return adev_open_output_stream(device, handle, devices, flags, config, stream_out);
+    #endif
 }
 
 #else
@@ -1312,7 +1328,13 @@ static int adev_open_input_stream(struct audio_hw_device *device,
                                   audio_io_handle_t handle,
                                   audio_devices_t devices,
                                   struct audio_config *config,
-                                  struct audio_stream_in **stream_in)
+                                  struct audio_stream_in **stream_in
+                                  #if SCR_SDK_VERSION >= 20
+                                  ,audio_input_flags_t flags,
+                                  const char *address,
+                                  audio_source_t source
+                                  #endif
+                                  )
 {
     struct scr_audio_device *scr_dev = (struct scr_audio_device *)device;
     audio_hw_device_t *primary = scr_dev->primary.current;
@@ -1332,7 +1354,11 @@ static int adev_open_input_stream(struct audio_hw_device *device,
         if (scr_dev->qcom) {
             ret = scr_dev->primary.qcom->open_input_stream(primary, handle, devices, config, &in->primary);
         } else {
+            #if SCR_SDK_VERSION >= 20
+            ret = primary->open_input_stream(primary, handle, devices, config, &in->primary, flags, address, source);
+            #else
             ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
+            #endif
         }
         if (in->mix_mic && (config->sample_rate != req_sample_rate || config->format != AUDIO_FORMAT_PCM_16_BIT)) {
             ALOGW("Input stream config changed to %d 0x%08X return value %d", config->sample_rate, config->format, ret);
@@ -1356,10 +1382,20 @@ static int adev_detect_qcom_open_input_stream(struct audio_hw_device *device,
                                   audio_io_handle_t handle,
                                   audio_devices_t devices,
                                   struct audio_config *config,
-                                  struct audio_stream_in **stream_in)
+                                  struct audio_stream_in **stream_in
+                                  #if SCR_SDK_VERSION >= 20
+                                  ,audio_input_flags_t flags,
+                                  const char *address,
+                                  audio_source_t source
+                                  #endif
+                                  )
 {
     convert_to_qcom(device);
+    #if SCR_SDK_VERSION >= 20
+    return adev_open_input_stream(device, handle, devices, config, stream_in, flags, address, source);
+    #else
     return adev_open_input_stream(device, handle, devices, config, stream_in);
+    #endif
 }
 
 #else
