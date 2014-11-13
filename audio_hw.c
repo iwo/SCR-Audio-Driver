@@ -737,7 +737,7 @@ static int mix_frames(struct scr_audio_device *device, struct scr_stream_in *scr
         for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
             get_32bit_stereo_frame(device, scr_stream, &l, &r);
             l = apply_gain(scr_stream, l) + dst[frames_read * 2];
-            r = apply_gain(scr_stream, l) + dst[frames_read * 2 + 1];
+            r = apply_gain(scr_stream, r) + dst[frames_read * 2 + 1];
             dst[frames_read * 2] = clip_to_16bit(l);
             dst[frames_read * 2 + 1] = clip_to_16bit(r);
         }
