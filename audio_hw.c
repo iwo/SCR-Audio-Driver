@@ -237,13 +237,9 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 {
     struct scr_stream_out *scr_stream = (struct scr_stream_out *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
-    if (scr_stream->dev->verbose_logging) {
-        ALOGV("%s %p %s", __func__, stream, kvpairs);
-    }
+    ALOGV("%s %p %s", __func__, stream, kvpairs);
     int result =  primary->set_parameters(primary, kvpairs);
-    if (scr_stream->dev->verbose_logging) {
-        ALOGV("%s %p %s result: %d", __func__, stream, kvpairs, result);
-    }
+    ALOGV("%s %p %s result: %d", __func__, stream, kvpairs, result);
     return result;
 }
 
@@ -484,8 +480,12 @@ static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct audio_stream *primary = &scr_stream->primary->common;
     //TODO: make sure that sample rate and format is not changed here
-    if (primary)
-        return primary->set_parameters(primary, kvpairs);
+    if (primary) {
+        ALOGV("%s %p %s", __func__, stream, kvpairs);
+        int result = primary->set_parameters(primary, kvpairs);
+        ALOGV("%s %p %s result: %d", __func__, stream, kvpairs, result);
+        return result;
+    }
     ALOGD("ignoring in_set_parameters %s", kvpairs);
     return -EINVAL;
 }
