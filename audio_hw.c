@@ -912,7 +912,7 @@ static ssize_t in_read_mix(struct audio_stream_in *stream, void *buffer, size_t 
         if (device->verbose_logging) {
             int64_t now = get_time_us();
             int duration_ms = (now - stats_start_time) / 1000ll;
-            ALOGV("in_read_mix primary driver returned %d in %d ms. Remaining %d frames", result, duration_ms, get_available_frames(device, scr_stream));
+            ALOGV("in_read_mix primary driver returned %d in %d ms. Remaining %d frames", (int) result, duration_ms, get_available_frames(device, scr_stream));
         }
     }
     return result;
