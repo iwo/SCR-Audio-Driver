@@ -604,7 +604,7 @@ static void wait_for_frames(struct scr_audio_device *device, struct scr_stream_i
     }
 }
 
-static bool should_extend_silence(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int sample_rate, int frames_to_read, int available_frames, int64_t ret_time) {
+static bool should_extend_silence(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int sample_rate, int frames_to_read, int available_frames) {
     if (scr_stream->recording_silence && device->out_active) {
         int64_t duration = frames_to_read * 1000000ll / sample_rate;
         int frames_to_catch_up = get_target_frames_count(scr_stream, frames_to_read);
@@ -789,7 +789,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
 
     available_frames = get_available_frames(device, scr_stream);
 
-    if (should_extend_silence(device, scr_stream, sample_rate, frames_to_read, available_frames, ret_time)) {
+    if (should_extend_silence(device, scr_stream, sample_rate, frames_to_read, available_frames)) {
         available_frames = 0;
     }
 
@@ -997,7 +997,7 @@ static int adev_open_output_stream(struct audio_hw_device *device,
                                    audio_output_flags_t flags,
                                    struct audio_config *config,
                                    struct audio_stream_out **stream_out
-                                   #if SCR_SDK_VERSION >= 20
+                                   #if SCR_SDK_VERSION >= 21
                                    ,const char *address
                                    #endif
                                    )
@@ -1015,7 +1015,7 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     if (scr_dev->qcom) {
         ret = scr_dev->primary.qcom->open_output_stream(primary, handle, devices, flags, config, &out->primary);
     } else {
-        #if SCR_SDK_VERSION >= 20
+        #if SCR_SDK_VERSION >= 21
         ret = primary->open_output_stream(primary, handle, devices, flags, config, &out->primary, address);
         #else
         ret = primary->open_output_stream(primary, handle, devices, flags, config, &out->primary);
@@ -1050,13 +1050,13 @@ static int adev_detect_qcom_open_output_stream(struct audio_hw_device *device,
                                    audio_output_flags_t flags,
                                    struct audio_config *config,
                                    struct audio_stream_out **stream_out
-                                   #if SCR_SDK_VERSION >= 20
+                                   #if SCR_SDK_VERSION >= 21
                                    ,const char *address
                                    #endif
                                    )
 {
     convert_to_qcom(device);
-    #if SCR_SDK_VERSION >= 20
+    #if SCR_SDK_VERSION >= 21
     return adev_open_output_stream(device, handle, devices, flags, config, stream_out, address);
     #else
     return adev_open_output_stream(device, handle, devices, flags, config, stream_out);
@@ -1210,7 +1210,7 @@ static size_t adev_get_input_buffer_size_common(const struct audio_hw_device *de
 
 #if SCR_SDK_VERSION >= 16
 static size_t adev_get_input_buffer_size(const struct audio_hw_device *device,
-                                         const struct audio_config *config)
+                                         const struct audio_config *config __unused)
 {
     return adev_get_input_buffer_size_common(device);
 }
@@ -1253,7 +1253,7 @@ static void apply_steam_config(struct scr_stream_in *in) {
     }
 }
 
-static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *sample_rate, struct scr_stream_in **stream_in) {
+static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *sample_rate, struct scr_stream_in **stream_in, bool hotword) {
     struct scr_stream_in *in;
 
     in = (struct scr_stream_in *)calloc(1, sizeof(struct scr_stream_in));
@@ -1282,7 +1282,11 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
     in->dev = scr_dev;
 
     *stream_in = in;
-    
+
+    if (hotword) {
+        ALOGV("hotword stream");
+        return 0;
+    }
     if (scr_dev->recorded_stream != NULL) {
         struct audio_stream *as = &scr_dev->recorded_stream->stream.common;
         uint32_t out_sample_rate = as->get_sample_rate(as);
@@ -1329,7 +1333,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
                                   audio_devices_t devices,
                                   struct audio_config *config,
                                   struct audio_stream_in **stream_in
-                                  #if SCR_SDK_VERSION >= 20
+                                  #if SCR_SDK_VERSION >= 21
                                   ,audio_input_flags_t flags,
                                   const char *address,
                                   audio_source_t source
@@ -1342,19 +1346,23 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     int ret = 0;
 
     disable_qcom_detection(device);
+    ALOGV("Open input stream 0x%08X, sample rate: %d, channels: 0x%08X", devices, config->sample_rate, config->channel_mask);
 
-    int status = open_input_stream_common(scr_dev, &config->sample_rate, &in);
+    bool hotword = false;
+    #if SCR_SDK_VERSION >= 21
+    hotword = (source == AUDIO_SOURCE_VOICE_RECOGNITION)  || (source == AUDIO_SOURCE_HOTWORD);
+    #endif
+    int status = open_input_stream_common(scr_dev, &config->sample_rate, &in, hotword);
     if (status < 0)
         return -ENOMEM;
 
-    ALOGV("Open input stream 0x%08X, sample rate: %d, channels: 0x%08X", devices, config->sample_rate, config->channel_mask);
 
     if (status == 0) {
         uint32_t req_sample_rate = config->sample_rate;
         if (scr_dev->qcom) {
             ret = scr_dev->primary.qcom->open_input_stream(primary, handle, devices, config, &in->primary);
         } else {
-            #if SCR_SDK_VERSION >= 20
+            #if SCR_SDK_VERSION >= 21
             ret = primary->open_input_stream(primary, handle, devices, config, &in->primary, flags, address, source);
             #else
             ret = primary->open_input_stream(primary, handle, devices, config, &in->primary);
@@ -1383,7 +1391,7 @@ static int adev_detect_qcom_open_input_stream(struct audio_hw_device *device,
                                   audio_devices_t devices,
                                   struct audio_config *config,
                                   struct audio_stream_in **stream_in
-                                  #if SCR_SDK_VERSION >= 20
+                                  #if SCR_SDK_VERSION >= 21
                                   ,audio_input_flags_t flags,
                                   const char *address,
                                   audio_source_t source
@@ -1391,7 +1399,7 @@ static int adev_detect_qcom_open_input_stream(struct audio_hw_device *device,
                                   )
 {
     convert_to_qcom(device);
-    #if SCR_SDK_VERSION >= 20
+    #if SCR_SDK_VERSION >= 21
     return adev_open_input_stream(device, handle, devices, config, stream_in, flags, address, source);
     #else
     return adev_open_input_stream(device, handle, devices, config, stream_in);
@@ -1407,7 +1415,7 @@ static int adev_open_input_stream_v0(struct audio_hw_device *device, uint32_t de
     audio_hw_device_t *primary = scr_dev->primary.current;
     struct scr_stream_in *in;
     int ret = 0;
-    int status = open_input_stream_common(scr_dev, sample_rate, &in);
+    int status = open_input_stream_common(scr_dev, sample_rate, &in, false);
     if (status < 0)
         return -ENOMEM;
 
@@ -1436,6 +1444,8 @@ static void adev_close_input_stream(struct audio_hw_device *device,
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)in;
     audio_hw_device_t *primary_dev = scr_dev->primary.current;
     struct audio_stream_in *primary_stream = scr_stream == NULL ? NULL : scr_stream->primary;
+    ALOGV("close input stream %p", in);
+
     if (primary_stream != NULL) {
         if (scr_dev->qcom) {
             scr_dev->primary.qcom->close_input_stream(primary_dev, primary_stream);
@@ -1594,8 +1604,8 @@ static void set_qcom_dev_methods(struct audio_hw_device_qcom *dev, struct audio_
     if (primary->set_master_volume != NULL) dev->set_master_volume = adev_set_master_volume;
 
     dev->get_input_buffer_size = adev_get_input_buffer_size;
-    dev->open_output_stream = adev_open_output_stream;
-    dev->open_input_stream = adev_open_input_stream;
+    dev->open_output_stream = (void *)adev_open_output_stream;
+    dev->open_input_stream = (void *)adev_open_input_stream;
     if (primary->get_master_volume != NULL) dev->get_master_volume = adev_get_master_volume;
 }
 
