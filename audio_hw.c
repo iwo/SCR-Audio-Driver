@@ -134,6 +134,7 @@ struct scr_stream_in {
     int64_t frames_read;
     bool recording_silence;
     bool mix_mic;
+    int mic_gain;
     int stats_data;
     int stats_silence;
     int stats_in_buffer_size;
@@ -725,24 +726,33 @@ static inline int16_t clip_to_16bit(int32_t sample) {
 }
 
 static int mix_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int16_t *dst, int frames_to_read, int available_frames) {
-    int frames_read = 0;
+    int i = 0;
     int channels_count = popcount(scr_stream->stream.common.get_channels(&scr_stream->stream.common));
     if (channels_count == 1) { // mono
-        for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
-            int32_t sample = dst[frames_read] + apply_gain(scr_stream, get_32bit_mono_frame(device, scr_stream));
-            dst[frames_read] = clip_to_16bit(sample);
+        for (i; i < frames_to_read; i++) {
+            if (i < available_frames) {
+                int32_t sample = dst[i] * scr_stream->mic_gain + apply_gain(scr_stream, get_32bit_mono_frame(device, scr_stream));
+                dst[i] = clip_to_16bit(sample);
+            } else {
+                dst[i] = clip_to_16bit(dst[i] * scr_stream->mic_gain);
+            }
         }
     } else { // stereo
-        int32_t l, r, i = 0;
-        for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
-            get_32bit_stereo_frame(device, scr_stream, &l, &r);
-            l = apply_gain(scr_stream, l) + dst[frames_read * 2];
-            r = apply_gain(scr_stream, r) + dst[frames_read * 2 + 1];
-            dst[frames_read * 2] = clip_to_16bit(l);
-            dst[frames_read * 2 + 1] = clip_to_16bit(r);
+        int32_t l, r;
+        for (i; i < frames_to_read; i++) {
+            if (i < available_frames) {
+                get_32bit_stereo_frame(device, scr_stream, &l, &r);
+                l = apply_gain(scr_stream, l) + dst[i * 2] * scr_stream->mic_gain;
+                r = apply_gain(scr_stream, r) + dst[i * 2 + 1] * scr_stream->mic_gain;
+                dst[i * 2] = clip_to_16bit(l);
+                dst[i * 2 + 1] = clip_to_16bit(r);
+            } else {
+                dst[i * 2] = clip_to_16bit(dst[i * 2] * scr_stream->mic_gain);
+                dst[i * 2 + 1] = clip_to_16bit(dst[i * 2 + 1] * scr_stream->mic_gain);
+            }
         }
     }
-    return frames_read;
+    return available_frames < frames_to_read ? available_frames : frames_to_read;
 }
 
 static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
@@ -1232,7 +1242,7 @@ static void apply_steam_config(struct scr_stream_in *in) {
     bool read = false;
     if (f != NULL) {
         int mix_mic = 0;
-        read =  (fscanf(f, "%d %d", &in->volume_gain, &mix_mic) == 2);
+        read =  (fscanf(f, "%d %d %d", &in->volume_gain, &mix_mic, &in->mic_gain) == 3);
         if (in->volume_gain < 1) {
             ALOGW("Incorrect gain received %d resetting to 1", in->volume_gain);
             in->volume_gain = 1;
@@ -1240,10 +1250,17 @@ static void apply_steam_config(struct scr_stream_in *in) {
             ALOGW("Incorrect gain received %d resetting to 16", in->volume_gain);
             in->volume_gain = 16;
         }
+        if (in->mic_gain < 1) {
+            ALOGW("Incorrect mic gain received %d resetting to 1", in->mic_gain);
+            in->mic_gain = 1;
+        } else if (in->mic_gain > 16) {
+            ALOGW("Incorrect mic gain received %d resetting to 16", in->mic_gain);
+            in->mic_gain = 16;
+        }
         in->mix_mic = (mix_mic != 0);
 
         if (read) {
-            ALOGD("Volume gain %d, mix mic: %s", in->volume_gain, in->mix_mic ? "true" : "false");
+            ALOGD("Volume gain %d, mix mic: %s, mic gain: %d", in->volume_gain, in->mix_mic ? "true" : "false", in->mic_gain);
         } else {
             ALOGW("Stream parameters not set");
         }
