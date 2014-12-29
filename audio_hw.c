@@ -1019,6 +1019,11 @@ static int adev_open_output_stream(struct audio_hw_device *device,
 
     disable_qcom_detection(device);
 
+    if ((flags & AUDIO_OUTPUT_FLAG_PRIMARY) == 0) {
+        ALOGV("Don't open non-primary output: %d", flags);
+        return -ENOSYS;
+    }
+
     if (adev_open_output_stream_common(scr_dev, &out, config->sample_rate))
         return -ENOMEM;
 
