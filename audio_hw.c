@@ -5,6 +5,11 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <sys/time.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <ctype.h>
+#include <stdlib.h>
 
 #include <math.h>
 
@@ -1271,7 +1276,7 @@ static void apply_steam_config(struct scr_stream_in *in) {
         }
         fclose(f);
     } else {
-        ALOGW("Can't open stream config");
+        ALOGW("Can't open stream config %s", strerror(errno));
     }
 }
 
@@ -1651,12 +1656,67 @@ static void disable_qcom_detection(struct audio_hw_device *device) {
 
 #endif // SCR_SDK_VERSION >= 16
 
+bool cmd_suffix_match(int pid, const char *suffix) {
+    char cmdline[1024];
+    int fd, r;
+    int suffix_len = strlen(suffix);
+
+    sprintf(cmdline, "/proc/%d/cmdline", pid);
+    fd = open(cmdline, O_RDONLY);
+    if (fd == 0)
+        return false;
+    r = read(fd, cmdline, 1023);
+    close(fd);
+    if (r <= 0) {
+        return false;
+    }
+    cmdline[r] = 0;
+
+    return r > suffix_len && strncmp(cmdline + r - 1 - suffix_len, suffix, suffix_len) == 0;
+}
+
+int get_pid_cmd_suffix(const char *suffix) {
+    DIR *d;
+    struct dirent *de;
+    int pid = -1;
+
+    d = opendir("/proc");
+    if (d == 0)
+        return -1;
+
+    while ((de = readdir(d)) != 0) {
+        if (!isdigit(de->d_name[0]))
+            continue;
+        pid = atoi(de->d_name);
+        if (pid != 0 && cmd_suffix_match(pid, suffix)) {
+            closedir(d);
+            return pid;
+        }
+    }
+    closedir(d);
+    return -1;
+}
+
 static int adev_open(const hw_module_t* module, const char* name,
                      hw_device_t** device)
 {
     ALOGV("Opening SCR device");
     struct scr_audio_device *scr_dev;
     int ret;
+
+    const struct hw_module_t *primaryModule;
+    ret = hw_get_module_by_class("audio", "original_primary", &primaryModule);
+
+    if (ret) {
+        ALOGE("error loading primary module. error: %d", ret);
+        return ret;
+    }
+    ALOGV("Using %s by %s", primaryModule->name ? primaryModule->name : "NULL", primaryModule->author ? primaryModule->author : "NULL");
+
+    if (get_pid_cmd_suffix("/screenrec") == -1) {
+        ALOGW("SCR not running. Reverting to system audio driver");
+        return primaryModule->methods->open(module, name, device);
+    }
 
     if (strcmp(name, AUDIO_HARDWARE_INTERFACE) != 0) {
         ALOGE("Incorrect module name \"%s\"", name);
@@ -1668,15 +1728,6 @@ static int adev_open(const hw_module_t* module, const char* name,
         ALOGE("Can't allocate module memory");
         return -ENOMEM;
     }
-
-    const struct hw_module_t *primaryModule;
-    ret = hw_get_module_by_class("audio", "original_primary", &primaryModule);
-
-    if (ret) {
-        ALOGE("error loading primary module. error: %d", ret);
-        goto err_open;
-    }
-    ALOGV("Using %s by %s", primaryModule->name ? primaryModule->name : "NULL", primaryModule->author ? primaryModule->author : "NULL");
 
     ret = primaryModule->methods->open(module, name, (struct hw_device_t **)&scr_dev->primary);
 
