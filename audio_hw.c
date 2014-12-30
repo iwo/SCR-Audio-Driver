@@ -453,6 +453,7 @@ static int in_set_format(struct audio_stream *stream, audio_format_t format)
 
 static int in_standby(struct audio_stream *stream)
 {
+    ALOGV("in standby %p", stream);
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
     struct scr_audio_device *device = scr_stream->dev;
     struct audio_stream *primary = &scr_stream->primary->common;
@@ -533,7 +534,7 @@ static void skip_excess_frames(struct scr_audio_device *device, struct scr_strea
 }
 
 static void activate_input(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int frames_to_read, int64_t duration) {
-    ALOGD("Input active");
+    ALOGD("Input active %p", scr_stream);
     // in_active is set after initial sleep to avoid overflows at startup
     scr_stream->in_start_us = get_time_us();
     scr_stream->frames_read = 0L;
@@ -1248,7 +1249,6 @@ static size_t adev_get_input_buffer_size_v0(const struct audio_hw_device *device
 
 static void apply_steam_config(struct scr_stream_in *in) {
     FILE* f = fopen("/system/lib/hw/scr_audio.conf", "r");
-    in->volume_gain = 4;
     bool read = false;
     if (f != NULL) {
         int mix_mic = 0;
@@ -1277,6 +1277,8 @@ static void apply_steam_config(struct scr_stream_in *in) {
         fclose(f);
     } else {
         ALOGW("Can't open stream config %s", strerror(errno));
+        in->volume_gain = 4;
+        in->mix_mic = false;
     }
 }
 
