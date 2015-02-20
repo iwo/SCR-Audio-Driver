@@ -386,13 +386,53 @@ static int in_set_sample_rate(struct audio_stream *stream, uint32_t rate)
     return 0;
 }
 
-static inline size_t stream_frame_size(const struct audio_stream *s)
+static inline size_t stream_out_frame_size(const struct audio_stream_out *s)
 {
-    #if SCR_SDK_VERSION < 17
+    #if SCR_SDK_VERSION >= 21
+    return audio_stream_out_frame_size(s);
+    #elif SCR_SDK_VERSION < 17
     return audio_stream_frame_size((struct audio_stream *) s); // cast to remove warning
     #else
     return audio_stream_frame_size(s);
     #endif
+}
+
+static inline size_t stream_in_frame_size(const struct audio_stream_in *s) {
+    #if SCR_SDK_VERSION >= 21
+    return audio_stream_in_frame_size(s);
+    #elif SCR_SDK_VERSION < 17
+    return audio_stream_frame_size((struct audio_stream *) s); // cast to remove warning
+    #else
+    return audio_stream_frame_size(s);
+    #endif
+}
+
+static inline size_t stream_out_bufer_frames(const struct audio_stream_out *s) {
+    return s->common.get_buffer_size(&s->common) / stream_out_frame_size(s);
+}
+
+#if SCR_SDK_VERSION < 21
+static inline uint32_t audio_channel_count_from_in_mask(audio_channel_mask_t channel)
+{
+    return popcount(channel);
+}
+
+static inline uint32_t audio_channel_count_from_out_mask(audio_channel_mask_t channel)
+{
+    return popcount(channel);
+}
+#endif
+
+static inline size_t stream_out_channel_count(const struct audio_stream_out *s)
+{
+    audio_channel_mask_t channel = s->common.get_channels(&s->common);
+    return audio_channel_count_from_out_mask(channel);
+}
+
+static inline size_t stream_in_channel_count(const struct audio_stream_in *s)
+{
+    audio_channel_mask_t channel = s->common.get_channels(&s->common);
+    return audio_channel_count_from_in_mask(channel);
 }
 
 static size_t in_get_buffer_size(const struct audio_stream *stream)
@@ -406,8 +446,7 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
     if (scr_stream_out == NULL) {
         return 2048;
     }
-    struct audio_stream *out_stream = &scr_stream_out->stream.common;
-    size_t out_size = out_stream->get_buffer_size(out_stream) / stream_frame_size(out_stream);
+    size_t out_size = stream_out_bufer_frames(&scr_stream_out->stream);
     size_t in_size = out_size;
     while (in_size < MIN_BUFFER_SIZE) {
         in_size += out_size;
@@ -415,7 +454,7 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
     if (scr_stream->dev->verbose_logging) {
         ALOGD("Setting buffer size to %d frames (output  %d)", in_size, out_size);
     }
-    return in_size * stream_frame_size(stream);
+    return in_size * stream_in_frame_size((struct audio_stream_in *) stream);
 }
 
 static uint32_t in_get_channels(const struct audio_stream *stream)
@@ -706,7 +745,7 @@ static inline int32_t apply_gain(struct scr_stream_in *scr_stream, int32_t unsca
 
 static int copy_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int16_t *dst, int frames_to_read, int available_frames) {
     int frames_read = 0;
-    int channels_count = popcount(scr_stream->stream.common.get_channels(&scr_stream->stream.common));
+    int channels_count = stream_in_channel_count(&scr_stream->stream);
     if (channels_count == 1) { // mono
         for (frames_read; frames_read < frames_to_read && frames_read < available_frames; frames_read++) {
             dst[frames_read] = apply_gain(scr_stream, get_32bit_mono_frame(device, scr_stream));
@@ -733,7 +772,7 @@ static inline int16_t clip_to_16bit(int32_t sample) {
 
 static int mix_frames(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int16_t *dst, int frames_to_read, int available_frames) {
     int i = 0;
-    int channels_count = popcount(scr_stream->stream.common.get_channels(&scr_stream->stream.common));
+    int channels_count = stream_in_channel_count(&scr_stream->stream);
     if (channels_count == 1) { // mono
         for (i; i < frames_to_read; i++) {
             if (i < available_frames) {
@@ -777,7 +816,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
 
     pthread_mutex_lock(&device->lock);
 
-    int frame_size = stream_frame_size(&stream->common);
+    int frame_size = stream_in_frame_size(stream);
     int frames_to_read = bytes / frame_size;
     int sample_rate = scr_stream->sample_rate;
     int64_t duration = frames_to_read * 1000000ll / sample_rate;
@@ -858,7 +897,7 @@ static ssize_t in_read_mix(struct audio_stream_in *stream, void *buffer, size_t 
     if (result > 0) {
         pthread_mutex_lock(&device->lock);
 
-        int frame_size = stream_frame_size(&stream->common);
+        int frame_size = stream_in_frame_size(stream);
         int frames_to_read = result / frame_size;
         int sample_rate = scr_stream->sample_rate;
 
@@ -961,10 +1000,8 @@ static int in_remove_audio_effect(const struct audio_stream *stream, effect_hand
     return 0;
 }
 
-static int adev_open_output_stream_common(struct scr_audio_device *scr_dev, struct scr_stream_out **stream_out, uint32_t sample_rate) {
+static int adev_open_output_stream_common(struct scr_audio_device *scr_dev, struct scr_stream_out **stream_out) {
     struct scr_stream_out *out;
-
-    ALOGV("Open output stream %d, sample_rate: %d", scr_dev->num_out_streams, sample_rate);
 
     out = (struct scr_stream_out *)calloc(1, sizeof(struct scr_stream_out));
     if (!out) {
@@ -1030,7 +1067,8 @@ static int adev_open_output_stream(struct audio_hw_device *device,
         return -ENOSYS;
     }
 
-    if (adev_open_output_stream_common(scr_dev, &out, config->sample_rate))
+    ALOGV("Open output stream %d, sample_rate: %d channels: 0x%08X format: 0x%08X", scr_dev->num_out_streams, config->sample_rate, config->channel_mask, config->format);
+    if (adev_open_output_stream_common(scr_dev, &out))
         return -ENOMEM;
 
     if (scr_dev->qcom) {
@@ -1054,7 +1092,7 @@ static int adev_open_output_stream(struct audio_hw_device *device,
     }
 
     if (out == scr_dev->recorded_stream) {
-        scr_dev->out_channels = popcount(config->channel_mask);
+        scr_dev->out_channels = audio_channel_count_from_out_mask(config->channel_mask);
         scr_dev->out_format = config->format;
         scr_dev->out_sample_rate = config->sample_rate;
         scr_dev->out_frame_size = audio_bytes_per_sample(scr_dev->out_format) * scr_dev->out_channels;
@@ -1095,7 +1133,8 @@ static int adev_open_output_stream_v0(struct audio_hw_device *device,
     audio_hw_device_t *primary = scr_dev->primary.current;
     struct scr_stream_out *out = NULL;
 
-    if (adev_open_output_stream_common(scr_dev, &out, *sample_rate))
+    ALOGV("Open output stream %d, sample_rate: %d channels: 0x%08X format: 0x%08X", scr_dev->num_out_streams, *sample_rate, *channels, *format);
+    if (adev_open_output_stream_common(scr_dev, &out))
         return -ENOMEM;
 
     int ret = primary->open_output_stream(primary, devices, format, channels, sample_rate, &out->primary);
@@ -1107,14 +1146,14 @@ static int adev_open_output_stream_v0(struct audio_hw_device *device,
     }
 
         if (out == scr_dev->recorded_stream) {
-            scr_dev->out_channels = popcount(*channels);
+            scr_dev->out_channels = audio_channel_count_from_out_mask(*channels);
             scr_dev->out_format = *format;
             scr_dev->out_sample_rate = *sample_rate;
             scr_dev->out_frame_size = audio_bytes_per_sample(scr_dev->out_format) * scr_dev->out_channels;
         }
 
     *stream_out = &out->stream;
-    ALOGV("stream out: %p primary: %p sample_rate: %d", out, out->primary, *sample_rate);
+    ALOGV("stream out: %p primary: %p sample_rate: %d channels: %d format: 0x%08X", out, out->primary, *sample_rate, scr_dev->out_channels, scr_dev->out_format);
     return 0;
 }
 
@@ -1222,8 +1261,7 @@ static size_t adev_get_input_buffer_size_common(const struct audio_hw_device *de
     // return something big to avoid buffer overruns
     // the actual size will be returned from in_get_buffer_size
     if (recorded_stream != NULL) {
-        struct audio_stream* stream = &recorded_stream->stream.common;
-        size_t size = 8 * stream->get_buffer_size(stream) / popcount(stream->get_channels(stream));
+        size_t size = 8 * stream_out_bufer_frames(&recorded_stream->stream);
         return size > MAX_DEVICE_BUFFER_SIZE ? MAX_DEVICE_BUFFER_SIZE : size;
     }
     return MAX_DEVICE_BUFFER_SIZE;
@@ -1328,7 +1366,7 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
     
             in->sample_rate = req_sample_rate;
             in->out_sample_rate_divider = out_sample_rate / req_sample_rate;
-            in->stats_out_buffer_size = as->get_buffer_size(as) / stream_frame_size(as);
+            in->stats_out_buffer_size = stream_out_bufer_frames(&scr_dev->recorded_stream->stream);
         } else if (req_sample_rate >= 44100) {
             ALOGE("Opened SCR input stream will require resampling %d => %d", out_sample_rate, req_sample_rate);
             scr_dev->in_open = true;
@@ -1336,7 +1374,7 @@ static int open_input_stream_common(struct scr_audio_device *scr_dev, uint32_t *
 
             in->sample_rate = out_sample_rate;
             in->out_sample_rate_divider = 1;
-            in->stats_out_buffer_size = as->get_buffer_size(as) / stream_frame_size(as);
+            in->stats_out_buffer_size = stream_out_bufer_frames(&scr_dev->recorded_stream->stream);
         } else {
             ALOGV("opening standard input stream at %d (out %d)", req_sample_rate, out_sample_rate);
             return 0;
@@ -1375,7 +1413,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
     int ret = 0;
 
     disable_qcom_detection(device);
-    ALOGV("Open input stream 0x%08X, sample rate: %d, channels: 0x%08X", devices, config->sample_rate, config->channel_mask);
+    ALOGV("Open input stream 0x%08X, sample rate: %d, channels: 0x%08X, format: 0x%08X", devices, config->sample_rate, config->channel_mask, config->format);
 
     bool hotword = false;
     #if SCR_SDK_VERSION >= 21
