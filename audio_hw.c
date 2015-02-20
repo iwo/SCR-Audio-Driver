@@ -393,7 +393,7 @@ static inline size_t stream_out_frame_size(const struct audio_stream_out *s)
     #elif SCR_SDK_VERSION < 17
     return audio_stream_frame_size((struct audio_stream *) s); // cast to remove warning
     #else
-    return audio_stream_frame_size(s);
+    return audio_stream_frame_size(&s->common);
     #endif
 }
 
@@ -403,7 +403,7 @@ static inline size_t stream_in_frame_size(const struct audio_stream_in *s) {
     #elif SCR_SDK_VERSION < 17
     return audio_stream_frame_size((struct audio_stream *) s); // cast to remove warning
     #else
-    return audio_stream_frame_size(s);
+    return audio_stream_frame_size(&s->common);
     #endif
 }
 
