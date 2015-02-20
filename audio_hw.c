@@ -411,6 +411,10 @@ static inline size_t stream_out_bufer_frames(const struct audio_stream_out *s) {
     return s->common.get_buffer_size(&s->common) / stream_out_frame_size(s);
 }
 
+#if SCR_SDK_VERSION < 16
+typedef uint32_t audio_channel_mask_t;
+#endif
+
 #if SCR_SDK_VERSION < 21
 static inline uint32_t audio_channel_count_from_in_mask(audio_channel_mask_t channel)
 {
