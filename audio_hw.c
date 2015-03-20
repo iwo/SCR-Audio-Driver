@@ -1748,6 +1748,15 @@ static int adev_open(const hw_module_t* module, const char* name,
     struct scr_audio_device *scr_dev;
     int ret;
 
+    FILE *log = fopen("/system/lib/hw/scr_audio.log", "a");
+    if (log == NULL) {
+        ALOGW("Can't open log file %s", strerror(errno));
+    } else {
+        int now = time(NULL);
+        fprintf(log, "loaded %d\n", now);
+        fclose(log);
+    }
+
     const struct hw_module_t *primaryModule;
     ret = hw_get_module_by_class("audio", "original_primary", &primaryModule);
 
