@@ -439,6 +439,12 @@ static inline size_t stream_in_channel_count(const struct audio_stream_in *s)
     return audio_channel_count_from_in_mask(channel);
 }
 
+static inline void log_input_stream_info(struct scr_stream_in *scr_stream) {
+    struct audio_stream_in *stream_in = &scr_stream->stream;
+    struct audio_stream *stream = &stream_in->common;
+    ALOGV("stream info %p channels: 0x%08X channel count: %d format: 0x%08X", scr_stream, stream->get_channels(stream), stream_in_channel_count(stream_in), stream->get_format(stream));
+}
+
 static size_t in_get_buffer_size(const struct audio_stream *stream)
 {
     struct scr_stream_in *scr_stream = (struct scr_stream_in *)stream;
@@ -578,6 +584,7 @@ static void skip_excess_frames(struct scr_audio_device *device, struct scr_strea
 
 static void activate_input(struct scr_audio_device *device, struct scr_stream_in *scr_stream, int frames_to_read, int64_t duration) {
     ALOGD("Input active %p", scr_stream);
+    log_input_stream_info(scr_stream);
     // in_active is set after initial sleep to avoid overflows at startup
     scr_stream->in_start_us = get_time_us();
     scr_stream->frames_read = 0L;
@@ -1454,6 +1461,7 @@ static int adev_open_input_stream(struct audio_hw_device *device,
 
     *stream_in = &in->stream;
     ALOGV("returning input stream %p", in);
+    log_input_stream_info(in);
     return 0;
 }
 
@@ -1503,6 +1511,7 @@ static int adev_open_input_stream_v0(struct audio_hw_device *device, uint32_t de
 
     *stream_in = &in->stream;
     ALOGV("returning input stream %p", in);
+    log_input_stream_info(in);
     return 0;
 }
 
